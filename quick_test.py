@@ -1,91 +1,105 @@
 """
-Quick Webhook Test - Hızlı Sinyal Testi
-Kullanım: python quick_test.py
+Binance Bot Quick Webhook Test
+Hızlı webhook testi için basitleştirilmiş script
 """
 
 import requests
 import json
-import sys
 
-WEBHOOK_URL = "http://127.0.0.1:5000/webhook"
+# Webhook URL
+WEBHOOK_URL = "http://127.0.0.1:5001/webhook"  # Local test için
+# WEBHOOK_URL = "https://cryptosynapse.net/webhook"  # EC2 test için
 
-# Hızlı test sinyalleri
-test_signals = [
-    {"symbol": "BTCUSDT", "action": "long", "desc": "BTC Long (USDT)"},
-    {"symbol": "ETHUSDT", "action": "short", "desc": "ETH Short (USDT)"},
-    {"symbol": "SOLUSDC", "action": "long", "desc": "SOL Long (USDC)"},
-]
-
-def send_test_signal(symbol, action, description):
-    """Test sinyali gönder"""
-    payload = {"symbol": symbol, "action": action}
+def send_test_signal(symbol, direction, action="open"):
+    """
+    Webhook'a test sinyali gönder
     
-    print(f"\n{'='*50}")
-    print(f"TEST: {description}")
-    print(f"Payload: {json.dumps(payload, indent=2)}")
-    print(f"{'='*50}")
+    Args:
+        symbol: Coin sembolü (örn: "BTCUSDT", "ETHUSDC")
+        direction: "long" veya "short"
+        action: "open" veya "close" (varsayılan: open)
+    """
+    # Doğru format: "SYMBOL/DIRECTION/ACTION"
+    signal = f"{symbol}/{direction}/{action}"
+    
+    payload = {
+        "signal": signal
+    }
+    
+    print(f"\n{'='*60}")
+    print(f"📤 Test Sinyali Gönderiliyor...")
+    print(f"{'='*60}")
+    print(f"URL:    {WEBHOOK_URL}")
+    print(f"Signal: {signal}")
+    print(f"{'='*60}\n")
     
     try:
         response = requests.post(WEBHOOK_URL, json=payload, timeout=10)
         
-        print(f"\nStatus Code: {response.status_code}")
+        print(f"Status: {response.status_code}")
         
         if response.status_code == 200:
-            print("✅ BAŞARILI!")
+            print("✅ BAŞARILI\n")
             try:
                 result = response.json()
-                print(f"Sonuç:\n{json.dumps(result, indent=2, ensure_ascii=False)}")
+                print("Cevap:")
+                print(json.dumps(result, indent=2, ensure_ascii=False))
             except:
-                print(f"Sonuç: {response.text}")
+                print(response.text)
         else:
-            print(f"❌ HATA!")
+            print("❌ HATA\n")
             print(f"Cevap: {response.text}")
             
-        return response.status_code == 200
-        
     except requests.exceptions.ConnectionError:
-        print("❌ BAĞLANTI HATASI - Flask uygulaması çalışmıyor!")
-        print("Önce 'python app.py' ile uygulamayı başlatın.")
-        return False
+        print("❌ BAĞLANTI HATASI!")
+        print("Flask uygulaması çalışıyor mu?")
+        print(f"URL: {WEBHOOK_URL}")
     except Exception as e:
         print(f"❌ HATA: {str(e)}")
-        return False
+
+def main():
+    """Ana fonksiyon - önceden tanımlı test sinyalleri"""
+    print("""
+╔══════════════════════════════════════════════════════════╗
+║       BINANCE BOT - QUICK WEBHOOK TEST                   ║
+╚══════════════════════════════════════════════════════════╝
+    """)
+    
+    # Test sinyalleri
+    test_signals = [
+        ("BTCUSDT", "long", "open"),
+        ("ETHUSDT", "short", "open"),
+        ("SOLUSDC", "long", "open"),
+    ]
+    
+    print("Test Sinyalleri:")
+    for i, (symbol, direction, action) in enumerate(test_signals, 1):
+        print(f"  {i}. {symbol}/{direction}/{action}")
+    
+    print("\n" + "="*60)
+    choice = input("\nTüm sinyalleri gönder? (y/n): ").strip().lower()
+    
+    if choice == 'y':
+        for symbol, direction, action in test_signals:
+            send_test_signal(symbol, direction, action)
+            print()
+        print("✅ Tüm test sinyalleri gönderildi!")
+    else:
+        # Manuel sinyal
+        print("\n📌 Manuel Test:")
+        symbol = input("Symbol (örn: BTCUSDT): ").strip().upper()
+        direction = input("Direction (long/short): ").strip().lower()
+        action = input("Action (open/close) [open]: ").strip().lower() or "open"
+        
+        if direction in ['long', 'short'] and action in ['open', 'close']:
+            send_test_signal(symbol, direction, action)
+        else:
+            print("❌ Geçersiz giriş!")
 
 if __name__ == "__main__":
-    print("\n" + "="*50)
-    print(" QUICK WEBHOOK TEST ".center(50))
-    print("="*50)
-    
-    # Komut satırından argüman varsa özel test
-    if len(sys.argv) == 3:
-        symbol = sys.argv[1].upper()
-        action = sys.argv[2].lower()
-        
-        if action not in ['long', 'short']:
-            print(f"❌ Geçersiz action: {action}")
-            print("Kullanım: python quick_test.py BTCUSDT long")
-            sys.exit(1)
-            
-        send_test_signal(symbol, action, f"{symbol} {action.upper()}")
-    else:
-        # Varsayılan testler
-        print("\n🚀 3 Test Sinyali Gönderiliyor...\n")
-        
-        success_count = 0
-        for test in test_signals:
-            if send_test_signal(test["symbol"], test["action"], test["desc"]):
-                success_count += 1
-            
-            if test != test_signals[-1]:  # Son sinyal değilse bekle
-                print("\n⏳ 2 saniye bekleniyor...")
-                import time
-                time.sleep(2)
-        
-        print(f"\n{'='*50}")
-        print(f"SONUÇ: {success_count}/{len(test_signals)} test başarılı")
-        print(f"{'='*50}\n")
-        
-        if success_count == 0:
-            print("💡 İPUCU: Flask uygulamanızın çalıştığından emin olun:")
-            print("   python app.py")
-
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n👋 İptal edildi")
+    except Exception as e:
+        print(f"\n❌ Hata: {str(e)}")

@@ -1,85 +1,106 @@
 # Webhook Test Rehberi
 
+## ⚠️ ÖNEMLİ: Doğru Webhook Formatı
+
+Webhook endpoint **zorunlu olarak** şu formatı bekler:
+
+```json
+{
+  "signal": "SYMBOL/DIRECTION/ACTION"
+}
+```
+
+**Örnekler:**
+- `{"signal": "BTCUSDT/long/open"}` ✅
+- `{"signal": "ETHUSDC/short/open"}` ✅
+- `{"signal": "SOLUSDT/long/close"}` ✅
+
+**Yanlış formatlar (ÇALIŞMAZ):**
+- `{"symbol": "BTC", "action": "long"}` ❌
+- `{"ticker": "BTCUSDT", "side": "BUY"}` ❌
+
+---
+
 ## 🚀 Hızlı Başlangıç
 
 ### 1. Flask Uygulamasını Başlat
 ```bash
+# Local test için
 python app.py
 ```
 
 ### 2. Yeni Bir Terminal Aç ve Test Et
 
+---
+
 ## 📋 Test Script'leri
 
-### Option 1: Hızlı Test (Önerilen)
-En basit ve hızlı test yöntemi:
-
-```bash
-python quick_test.py
-```
-
-Bu otomatik olarak 3 test sinyali gönderir:
-- BTC Long (USDT)
-- ETH Short (USDT)  
-- SOL Long (USDC)
-
-**Özel sinyal göndermek için:**
-```bash
-python quick_test.py BTCUSDT long
-python quick_test.py ETHUSDC short
-```
-
-### Option 2: Detaylı Test Menüsü
-Kapsamlı test menüsü ile:
+### Option 1: Manuel Coin Seçimi (ÖNERİLEN)
+Interaktif menü ile coin, pair, direction ve action seçin:
 
 ```bash
 python test_webhook.py
 ```
 
 **Menü seçenekleri:**
-1. USDT Coins Test - USDT çiftlerini test et
-2. USDC Coins Test - USDC çiftlerini test et
-3. Geçersiz Sinyal Test - Hata kontrolü
-4. Hızlı Duplicate Sinyal Test - Duplicate önleme kontrolü
-5. Karşıt Sinyal Test - Auto position switch kontrolü
-6. İnteraktif Test - Manuel sinyal gönder
-7. TÜM TESTLER - Her şeyi test et
+1. 🎯 **Manuel Coin Seçimi** - Kendi coininizi seçin
+   - Pair: USDT veya USDC
+   - Coin: BTC, ETH, SOL, vb.
+   - Direction: Long veya Short
+   - Action: Open veya Close
+
+2. ⚡ **Hızlı Test** - 3 önceden tanımlı sinyal
+3. 🔄 **Karşıt Sinyal Testi** - Position switch kontrolü
+4. ⚡ **Duplicate Sinyal Testi** - Duplicate önleme kontrolü
+5. 🌍 **Ortam Değiştir** - Local/EC2 seçimi
+
+### Option 2: Hızlı Test
+En basit test yöntemi:
+
+```bash
+python quick_test.py
+```
+
+Bu otomatik olarak 3 test sinyali gönderir:
+- BTCUSDT/long/open
+- ETHUSDT/short/open
+- SOLUSDC/long/open
 
 ## 📊 Test Senaryoları
 
-### Senaryo 1: Basit Long/Short Test
+### Senaryo 1: Manuel Coin Seçimi
 ```bash
-python quick_test.py BTCUSDT long
-# Dashboard'da pozisyon açıldığını kontrol et
-
-python quick_test.py BTCUSDT short
-# Auto switch özelliği çalışıyorsa pozisyon kapanıp SHORT açılmalı
+python test_webhook.py
+# Menüden 1'i seçin (Manuel Coin Seçimi)
+# Adım adım coininizi, pair'inizi ve yönünüzü seçin
 ```
 
-### Senaryo 2: Farklı Coinler
+### Senaryo 2: Hızlı Test
 ```bash
-python quick_test.py ETHUSDT long
-python quick_test.py SOLUSDC short
-python quick_test.py BNBUSDT long
+python quick_test.py
+# Otomatik olarak 3 test sinyali gönderir
 ```
 
 ### Senaryo 3: Duplicate Kontrolü
 ```bash
-# Aynı sinyali 3 kez hızlıca gönder
-python quick_test.py BTCUSDT long
-python quick_test.py BTCUSDT long
-python quick_test.py BTCUSDT long
-# Sadece ilki işlenmeli (cooldown sistemi)
+python test_webhook.py
+# Menüden 4'ü seçin (Duplicate Sinyal Testi)
+# Aynı sinyal 3 kez gönderilir, sadece ilki işlenmeli
 ```
 
 ### Senaryo 4: Position Switch
 ```bash
-# İlk pozisyonu aç
-python quick_test.py ETHUSDT long
+python test_webhook.py
+# Menüden 3'ü seçin (Karşıt Sinyal Testi)
+# Önce LONG, sonra SHORT açılır (auto switch kontrolü)
+```
 
-# Bekle ve karşıt sinyal gönder
-python quick_test.py ETHUSDT short
-# Auto position switch ON ise LONG kapanıp SHORT açılmalı
+### Senaryo 5: EC2 (Production) Test
+```bash
+python test_webhook.py
+# Menüden 5'i seçin (Ortam Değiştir)
+# EC2'yi seçin
+# Sonra manuel coin seçimi ile test edin
 ```
 
 ## 🔍 Kontrol Edilmesi Gerekenler

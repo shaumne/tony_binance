@@ -530,9 +530,24 @@ def webhook():
             symbol_lock = get_symbol_lock(symbol)
             
             with symbol_lock:
-                process_signal(symbol, direction, action)
+                result = process_signal(symbol, direction, action)
             
-            return jsonify({"status": "success"}), 200
+            if result and result.get('success'):
+                return jsonify({
+                    "status": "success",
+                    "message": result.get('message', 'Order processed'),
+                    "order_id": result.get('order_id')
+                }), 200
+            elif result and result.get('error'):
+                return jsonify({
+                    "status": "error",
+                    "message": result.get('error')
+                }), 200
+            else:
+                return jsonify({
+                    "status": "error",
+                    "message": "Order processing failed - check logs"
+                }), 200
         else:
             return jsonify({"status": "error", "message": "Handler not initialized"}), 500
             
@@ -540,15 +555,86 @@ def webhook():
         logger.error(f"Webhook error: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route('/test_telegram', methods=['GET', 'POST'])
+@login_required
+def test_telegram():
+    """Test Telegram notification endpoint"""
+    try:
+        config = load_config()
+        
+        if not binance_handler:
+            return jsonify({
+                "status": "error",
+                "message": "Binance handler not initialized"
+            }), 500
+        
+        # Get test message from request or use default
+        if request.method == 'POST' and request.json:
+            test_message = request.json.get('message', 'Test notification from Binance Bot')
+        else:
+            test_message = "🧪 TEST NOTIFICATION\n\nThis is a test message from Binance Trading Bot.\n\nIf you receive this, Telegram integration is working correctly!"
+        
+        # Send notification
+        try:
+            import asyncio
+            import threading
+            
+            def send_in_thread():
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(binance_handler.send_telegram_notification(test_message))
+                    finally:
+                        loop.close()
+                except Exception as e:
+                    logger.error(f"Error in test notification thread: {str(e)}")
+            
+            thread = threading.Thread(target=send_in_thread, daemon=True)
+            thread.start()
+            thread.join(timeout=10)  # Wait max 10 seconds
+            
+            return jsonify({
+                "status": "success",
+                "message": "Test notification sent",
+                "telegram_config": {
+                    "bot_token": "Set" if config.telegram_bot_token else "Not Set",
+                    "chat_id": config.telegram_chat_id if config.telegram_chat_id else "Not Set"
+                }
+            }), 200
+            
+        except Exception as e:
+            logger.error(f"Error sending test notification: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return jsonify({
+                "status": "error",
+                "message": f"Failed to send notification: {str(e)}",
+                "telegram_config": {
+                    "bot_token": "Set" if config.telegram_bot_token else "Not Set",
+                    "chat_id": config.telegram_chat_id if config.telegram_chat_id else "Not Set"
+                }
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Test telegram error: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 def process_signal(symbol, direction, action):
     """Process trading signal"""
     logger.info(f"Processing: {symbol}/{direction}/{action}")
     
     if not binance_handler:
-        return
+        logger.error("Binance handler not initialized")
+        return {"success": False, "error": "Binance handler not initialized"}
     
     try:
         config = load_config()
+        
+        # Check if trading is enabled
+        if not config.enable_trading:
+            logger.warning("Trading is globally disabled")
+            return {"success": False, "error": "Trading is globally disabled"}
         
         # Check daily limits
         if action == 'open':
@@ -559,19 +645,31 @@ def process_signal(symbol, direction, action):
         current_positions = binance_handler.get_open_positions()
         if action == 'open' and len(current_positions) >= config.max_open_positions:
             logger.info("Max positions reached")
-            return
+            return {"success": False, "error": f"Max positions reached ({config.max_open_positions})"}
         
         # Execute trade
         side = f"{action}_{direction}"
         order_result = binance_handler.place_order(symbol, side)
         
         if order_result and 'error' not in order_result:
-            logger.info(f"Order executed: {order_result.get('orderId')}")
+            order_id = order_result.get('orderId', 'N/A')
+            logger.info(f"✅ Order executed successfully: {order_id}")
+            return {
+                "success": True,
+                "message": f"Order executed: {order_id}",
+                "order_id": order_id,
+                "symbol": symbol,
+                "side": side
+            }
         else:
-            logger.error(f"Order failed: {order_result.get('error')}")
+            error_msg = order_result.get('error', 'Unknown error') if order_result else 'No response from exchange'
+            logger.error(f"❌ Order failed: {error_msg}")
+            return {"success": False, "error": error_msg}
             
     except Exception as e:
-        logger.error(f"Signal processing error: {str(e)}")
+        error_msg = f"Signal processing error: {str(e)}"
+        logger.error(error_msg)
+        return {"success": False, "error": error_msg}
 
 def start_position_monitor(binance_handler):
     """Start position monitoring"""
