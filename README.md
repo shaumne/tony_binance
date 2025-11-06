@@ -79,29 +79,113 @@ http://localhost:5001
 Default login: admin / admin
 ```
 
-### EC2 Deployment
+### EC2 Production Deployment
+
+For production deployment on AWS EC2 with SSL, domain, and systemd service:
+
+#### Prerequisites
+- Ubuntu 20.04+ EC2 instance
+- Domain pointing to your EC2 (e.g., cryptosynapse.net)
+- Root/sudo access
+- EC2 Security Group allowing ports: 22, 80, 443
+
+#### Quick Deployment
 
 1. **Upload files to EC2:**
 ```bash
-scp -r * ubuntu@YOUR_EC2_IP:/home/ubuntu/binance_bot/
+scp -r * ubuntu@54.255.77.184:/home/ubuntu/tony_binance/
 ```
 
 2. **Connect to EC2:**
 ```bash
-ssh ubuntu@YOUR_EC2_IP
+ssh ubuntu@54.255.77.184
 ```
 
-3. **Run deployment script:**
+3. **Run production deployment script:**
 ```bash
-cd /home/ubuntu/binance_bot
-chmod +x deploy_to_ec2.sh
-./deploy_to_ec2.sh
+cd /home/ubuntu/tony_binance
+chmod +x deploy_ec2_production.sh
+sudo ./deploy_ec2_production.sh
 ```
 
-4. **Access the bot:**
+The script will automatically:
+- ✅ Install Python 3, Nginx, Certbot, and dependencies
+- ✅ Setup virtual environment and install packages
+- ✅ Create systemd service for auto-start
+- ✅ Configure Nginx reverse proxy
+- ✅ Setup SSL certificates (Let's Encrypt)
+- ✅ Configure UFW firewall
+- ✅ Start all services
+
+#### Access Your Bot
+
+After successful deployment:
+- **Dashboard:** https://cryptosynapse.net
+- **Webhook:** https://cryptosynapse.net/webhook
+- **Default Login:** admin / admin
+
+#### Important Configuration
+
+Before running the deployment script:
+
+1. **Configure your domain DNS** (see `DOMAIN_SETUP_GUIDE.md`):
+   - Add A record: cryptosynapse.net → 54.255.77.184
+   - Add A record: www.cryptosynapse.net → 54.255.77.184
+   - Wait for DNS propagation (5 min - 48 hours)
+
+2. **Configure EC2 Security Group:**
+   - Port 22 (SSH) - Your IP
+   - Port 80 (HTTP) - 0.0.0.0/0
+   - Port 443 (HTTPS) - 0.0.0.0/0
+
+3. **Update email in script** (optional):
+   - Edit `deploy_ec2_production.sh`
+   - Change: `EMAIL="admin@cryptosynapse.net"`
+
+#### Service Management
+
+```bash
+# Application service
+sudo systemctl status tony_binance
+sudo systemctl restart tony_binance
+sudo systemctl stop tony_binance
+
+# View logs
+sudo journalctl -u tony_binance -f
+tail -f /home/ubuntu/tony_binance/logs/app.log
+
+# Nginx
+sudo systemctl restart nginx
+sudo nginx -t  # Test configuration
 ```
-http://YOUR_EC2_IP
+
+#### SSL Certificate Renewal
+
+SSL certificates auto-renew via certbot. To manually renew:
+
+```bash
+sudo certbot renew
+sudo systemctl restart nginx
 ```
+
+#### Documentation
+
+For detailed guides, see:
+- **`DOMAIN_SETUP_GUIDE.md`** - DNS configuration and domain setup
+- **`POST_DEPLOYMENT.md`** - Post-deployment tasks, maintenance, troubleshooting
+- **`WEBHOOK_TEST_GUIDE.md`** - Testing webhooks and signals
+
+#### Deployment Details
+
+- **Installation Path:** `/home/ubuntu/tony_binance`
+- **Service Name:** `tony_binance`
+- **Internal Port:** 5001
+- **External Ports:** 80 (HTTP) → 443 (HTTPS)
+- **Domain:** cryptosynapse.net
+- **Public IP:** 54.255.77.184
+- **SSL Provider:** Let's Encrypt (free, auto-renewal)
+- **Web Server:** Nginx (reverse proxy)
+- **Process Manager:** systemd
 
 ## ⚙️ Configuration
 
@@ -228,60 +312,90 @@ SOLUSDT/long/close    → Close long position on SOL/USDT
 
 ## 🛠️ Service Management
 
-### Start/Stop Service
+### Start/Stop Service (Production/EC2)
 ```bash
-sudo systemctl start binance_bot
-sudo systemctl stop binance_bot
-sudo systemctl restart binance_bot
+sudo systemctl start tony_binance
+sudo systemctl stop tony_binance
+sudo systemctl restart tony_binance
+sudo systemctl enable tony_binance  # Enable auto-start on boot
 ```
 
 ### View Logs
 ```bash
-sudo journalctl -u binance_bot -f
-```
+# Real-time application logs
+sudo journalctl -u tony_binance -f
 
-or
+# Last 50 lines
+sudo journalctl -u tony_binance -n 50
 
-```bash
-tail -f logs/app.log
+# Application file logs
+tail -f /home/ubuntu/tony_binance/logs/app.log
+tail -f /home/ubuntu/tony_binance/logs/error.log
+
+# Nginx logs
+tail -f /home/ubuntu/tony_binance/logs/nginx_access.log
+tail -f /home/ubuntu/tony_binance/logs/nginx_error.log
 ```
 
 ### Check Status
 ```bash
-sudo systemctl status binance_bot
+# Application status
+sudo systemctl status tony_binance
+
+# Nginx status
+sudo systemctl status nginx
+
+# Check if services are enabled
+sudo systemctl is-enabled tony_binance
 ```
 
 ## 📁 Project Structure
 
 ```
 tony_binance_bot/
-├── app.py                      # Main Flask application
-├── binance_handler.py          # Binance API integration
-├── models.py                   # Data models (User, Config, Position)
-├── tp_sl_manager.py           # TP/SL calculation logic
-├── coin_config_manager.py     # Per-coin configuration
-├── position_validator.py      # Position validation & duplicate prevention
-├── requirements.txt           # Python dependencies
-├── .gitignore                # Git ignore rules
-├── deploy_to_ec2.sh          # EC2 deployment script
-├── README.md                 # This file
+├── app.py                         # Main Flask application
+├── binance_handler.py             # Binance API integration
+├── models.py                      # Data models (User, Config)
+├── tp_sl_manager.py              # TP/SL calculation logic
+├── coin_config_manager.py        # Per-coin configuration
+├── position_validator.py         # Position validation & duplicate prevention
+├── requirements.txt              # Python dependencies
+├── .gitignore                   # Git ignore rules
+│
+├── README.md                    # Project documentation
+├── DOMAIN_SETUP_GUIDE.md        # DNS & domain configuration guide
+├── POST_DEPLOYMENT.md           # Post-deployment & maintenance guide
+├── WEBHOOK_TEST_GUIDE.md        # Webhook testing instructions
+│
+├── deploy_ec2_production.sh     # Production EC2 deployment script
+├── test_webhook.py              # Webhook testing script
+├── quick_test.py                # Quick webhook test script
+│
 ├── data/
-│   ├── config.json           # Bot configuration
-│   ├── users.json            # User credentials
-│   └── positions.json        # Position history
+│   ├── config.json              # Bot configuration
+│   ├── config_backup.json       # Configuration backup
+│   ├── users.json               # User credentials
+│   └── positions.json           # Position tracking
+│
 ├── templates/
-│   ├── base.html             # Base template
-│   ├── login.html            # Login page
-│   ├── dashboard.html        # Dashboard
-│   ├── settings.html         # Settings page
-│   └── history.html          # Trade history
+│   ├── base.html                # Base template with navigation
+│   ├── login.html               # Login page
+│   ├── dashboard.html           # Main dashboard with positions
+│   ├── settings.html            # Settings page (30 coins)
+│   ├── users.html               # User management
+│   └── change_password.html     # Password change
+│
 ├── static/
 │   ├── css/
-│   │   └── style.css         # Modern CSS styles
+│   │   └── style.css            # Modern dark mode CSS
 │   └── js/
-│       └── dashboard.js      # Dashboard JavaScript
+│       └── dashboard.js         # Dashboard auto-refresh
+│
 └── logs/
-    └── app.log               # Application logs
+    ├── app.log                  # Application logs
+    ├── error.log                # Error logs
+    ├── nginx_access.log         # Nginx access logs (production)
+    └── nginx_error.log          # Nginx error logs (production)
 ```
 
 ## 🔄 Workflow
@@ -309,35 +423,91 @@ tony_binance_bot/
 ### Bot not starting
 ```bash
 # Check logs
-sudo journalctl -u binance_bot -n 50
+sudo journalctl -u tony_binance -n 50
+
+# Check service status
+sudo systemctl status tony_binance
 
 # Verify Python environment
+cd /home/ubuntu/tony_binance
 source venv/bin/activate
 python --version
+
+# Try running manually for debugging
+python app.py
 ```
 
 ### API errors
 - Verify API keys in Settings
-- Check Binance API permissions
-- Confirm IP whitelist
+- Check Binance API permissions (enable Futures)
+- Confirm IP whitelist on Binance
 - Check API rate limits
+- Review logs: `sudo journalctl -u tony_binance -f`
 
 ### Webhook not working
 ```bash
-# Test webhook
-curl -X POST http://YOUR_IP/webhook \
+# Test webhook locally
+curl -X POST http://localhost:5001/webhook \
+  -H "Content-Type: application/json" \
+  -d '{"signal": "BTCUSDT/long/open"}'
+
+# Test webhook via domain
+curl -X POST https://cryptosynapse.net/webhook \
   -H "Content-Type: application/json" \
   -d '{"signal": "BTCUSDT/long/open"}'
 
 # Check Nginx logs
-sudo tail -f /var/log/nginx/error.log
+sudo tail -f /home/ubuntu/tony_binance/logs/nginx_error.log
+sudo tail -f /home/ubuntu/tony_binance/logs/nginx_access.log
+
+# Check application logs
+sudo journalctl -u tony_binance -f
+```
+
+### SSL Certificate Issues
+```bash
+# Check certificate status
+sudo certbot certificates
+
+# Renew certificate
+sudo certbot renew
+
+# Manual renewal
+sudo certbot --nginx -d cryptosynapse.net -d www.cryptosynapse.net
+```
+
+### 502 Bad Gateway
+This means Nginx can't connect to Flask:
+```bash
+# Check if Flask is running
+sudo systemctl status tony_binance
+
+# Check if port 5001 is listening
+sudo netstat -tulpn | grep 5001
+
+# Restart services
+sudo systemctl restart tony_binance
+sudo systemctl restart nginx
 ```
 
 ### Position errors
-- Check if trading is enabled for the coin
+- Check if trading is enabled for the coin (Settings page)
 - Verify balance is sufficient
-- Check leverage and margin mode
-- Review position limits
+- Check leverage and margin mode on Binance
+- Review position limits in Settings
+- Check logs for specific error messages
+
+### DNS not resolving
+```bash
+# Check DNS records
+dig cryptosynapse.net +short
+nslookup cryptosynapse.net
+
+# Wait for propagation (can take up to 48 hours)
+# Use online tools: dnschecker.org, whatsmydns.net
+```
+
+For comprehensive troubleshooting, see `POST_DEPLOYMENT.md`
 
 ## 📞 Support
 

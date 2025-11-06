@@ -44,10 +44,31 @@
             </div>
             
             <div class="nav-user">
-                <div class="user-avatar">
-                    <i class="fas fa-user"></i>
+                <div class="user-dropdown">
+                    <button class="user-dropdown-trigger" onclick="toggleUserDropdown()">
+                        <div class="user-avatar">
+                            <i class="fas fa-user"></i>
+                        </div>
+                        <span class="user-name">{{ current_user.id }}</span>
+                        <i class="fas fa-chevron-down dropdown-arrow"></i>
+                    </button>
+                    <div class="user-dropdown-menu" id="userDropdownMenu">
+                        <div class="dropdown-header">
+                            <i class="fas fa-user-circle"></i>
+                            <span>{{ current_user.id }}</span>
+                        </div>
+                        <div class="dropdown-divider"></div>
+                        <a href="{{ url_for('change_password') }}" class="dropdown-item">
+                            <i class="fas fa-key"></i>
+                            <span>Change Password</span>
+                        </a>
+                        <div class="dropdown-divider"></div>
+                        <a href="{{ url_for('logout') }}" class="dropdown-item logout">
+                            <i class="fas fa-sign-out-alt"></i>
+                            <span>Logout</span>
+                        </a>
+                    </div>
                 </div>
-                <span class="user-name">{{ current_user.id }}</span>
             </div>
         </div>
     </nav>
@@ -85,6 +106,39 @@
     
     <!-- Scripts -->
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+    <script>
+        // User dropdown toggle
+        function toggleUserDropdown() {
+            const menu = document.getElementById('userDropdownMenu');
+            const arrow = document.querySelector('.dropdown-arrow');
+            menu.classList.toggle('show');
+            arrow.classList.toggle('rotated');
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const dropdown = document.querySelector('.user-dropdown');
+            const menu = document.getElementById('userDropdownMenu');
+            const arrow = document.querySelector('.dropdown-arrow');
+            
+            if (!dropdown.contains(event.target) && menu.classList.contains('show')) {
+                menu.classList.remove('show');
+                arrow.classList.remove('rotated');
+            }
+        });
+
+        // Auto-hide flash messages
+        document.addEventListener('DOMContentLoaded', function() {
+            const alerts = document.querySelectorAll('.alert');
+            alerts.forEach(alert => {
+                setTimeout(() => {
+                    alert.style.opacity = '0';
+                    alert.style.transform = 'translateY(-20px)';
+                    setTimeout(() => alert.remove(), 300);
+                }, 5000);
+            });
+        });
+    </script>
     {% block extra_js %}{% endblock %}
 </body>
 </html>

@@ -281,6 +281,73 @@ def logout():
     flash('Logged out successfully', 'success')
     return redirect(url_for('login'))
 
+@app.route('/change_password', methods=['GET', 'POST'])
+@login_required
+def change_password():
+    if request.method == 'POST':
+        current_password = request.form.get('current_password')
+        new_password = request.form.get('new_password')
+        confirm_password = request.form.get('confirm_password')
+        
+        # Validation
+        if not current_password or not new_password or not confirm_password:
+            flash('All fields are required', 'danger')
+            return render_template('change_password.html')
+        
+        if len(new_password) < 6:
+            flash('New password must be at least 6 characters long', 'danger')
+            return render_template('change_password.html')
+        
+        if new_password != confirm_password:
+            flash('New passwords do not match', 'danger')
+            return render_template('change_password.html')
+        
+        if current_password == new_password:
+            flash('New password must be different from current password', 'warning')
+            return render_template('change_password.html')
+        
+        # Load users and verify current password
+        try:
+            with open('data/users.json', 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if not content:
+                    flash('System error: user database is empty', 'danger')
+                    return render_template('change_password.html')
+                users = json.loads(content)
+            
+            username = current_user.id
+            
+            if username not in users:
+                flash('User not found', 'danger')
+                return render_template('change_password.html')
+            
+            # Verify current password
+            if not check_password_hash(users[username]['password'], current_password):
+                flash('Current password is incorrect', 'danger')
+                return render_template('change_password.html')
+            
+            # Update password
+            users[username]['password'] = generate_password_hash(new_password)
+            
+            # Save users
+            with open('data/users.json', 'w', encoding='utf-8') as f:
+                json.dump(users, f, indent=2, ensure_ascii=False)
+            
+            flash('Password changed successfully!', 'success')
+            logger.info(f"Password changed for user: {username}")
+            return redirect(url_for('dashboard'))
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error in users.json: {str(e)}")
+            flash('System error: unable to read user database', 'danger')
+            return render_template('change_password.html')
+        except Exception as e:
+            logger.error(f"Error changing password: {str(e)}")
+            flash('An error occurred while changing password', 'danger')
+            return render_template('change_password.html')
+    
+    return render_template('change_password.html')
+
 @app.route('/dashboard')
 @login_required
 def dashboard():
