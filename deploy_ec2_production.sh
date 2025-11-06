@@ -27,7 +27,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 APP_NAME="tony_binance"
-APP_DIR="/home/ubuntu/tony_binance/tony_binance"
+APP_DIR="/home/ubuntu/tony_binance"
 APP_USER="ubuntu"
 APP_PORT="5001"
 DOMAIN="cryptosynapse.net"
@@ -159,8 +159,11 @@ setup_python_env() {
     
     # Install Python packages
     if [ -f "requirements.txt" ]; then
-        sudo -u $APP_USER bash -c "source venv/bin/activate && pip install --upgrade pip"
-        sudo -u $APP_USER bash -c "source venv/bin/activate && pip install -r requirements.txt"
+        sudo -u $APP_USER bash -c "source venv/bin/activate && pip install --upgrade pip setuptools wheel"
+        # Install numpy first (pandas dependency)
+        sudo -u $APP_USER bash -c "source venv/bin/activate && pip install 'numpy<2.0'"
+        # Install remaining packages
+        sudo -u $APP_USER bash -c "source venv/bin/activate && pip install -r requirements.txt --prefer-binary"
         print_message "Python packages installed"
     else
         print_error "requirements.txt not found!"
