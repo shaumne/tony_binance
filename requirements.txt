@@ -2,7 +2,7 @@ Flask
 Flask-Login
 Flask-WTF
 python-telegram-bot
-python-binance=
+python-binance
 requests
 python-dotenv
 Werkzeug
