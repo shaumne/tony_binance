@@ -356,55 +356,113 @@ class BinanceHandler:
             period (int): ATR period (default: 14)
             
         Returns:
-            float: Calculated ATR value
+            float: Calculated ATR value (0.0 if calculation fails)
         """
         try:
             formatted_symbol = self._format_symbol(symbol)
-            logger.info(f"Calculating ATR for {formatted_symbol}, Period: {period}")
+            logger.info(f"📊 Calculating ATR for {formatted_symbol}, Period: {period}")
             
-            # Fetch 1h klines (need period + 50 for ATR smoothing)
-            klines = self.client.futures_klines(
-                symbol=formatted_symbol,
-                interval=Client.KLINE_INTERVAL_1HOUR,  # 1h interval
-                limit=period + 50
-            )
+            # Validate period
+            if period < 1 or period > 100:
+                logger.warning(f"⚠️ Invalid ATR period: {period}, using default 14")
+                period = 14
             
-            if len(klines) < period + 1:
-                logger.warning(f"Not enough data for ATR calculation. Need: {period+1}, Got: {len(klines)}")
+            # Fetch 1h klines (need period + 50 for ATR smoothing and validation)
+            min_required = period + 10  # Minimum required for reliable calculation
+            requested_limit = period + 50  # Request more for smoothing
+            
+            try:
+                klines = self.client.futures_klines(
+                    symbol=formatted_symbol,
+                    interval=Client.KLINE_INTERVAL_1HOUR,  # 1h interval
+                    limit=requested_limit
+                )
+            except Exception as api_error:
+                logger.error(f"❌ Failed to fetch klines from Binance API: {str(api_error)}")
+                return 0.0
+            
+            if not klines or len(klines) == 0:
+                logger.warning(f"⚠️ No klines data received for {formatted_symbol}")
+                return 0.0
+            
+            if len(klines) < min_required:
+                logger.warning(f"⚠️ Insufficient data for ATR calculation.")
+                logger.warning(f"   Required: {min_required}, Got: {len(klines)}")
+                logger.warning(f"   This may indicate new listing or API issue")
                 return 0.0
             
             # Convert to DataFrame
-            df = pd.DataFrame(klines, columns=[
-                'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                'close_time', 'quote_volume', 'trades', 
-                'taker_buy_base', 'taker_buy_quote', 'ignore'
-            ])
+            try:
+                df = pd.DataFrame(klines, columns=[
+                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                    'close_time', 'quote_volume', 'trades', 
+                    'taker_buy_base', 'taker_buy_quote', 'ignore'
+                ])
+            except Exception as df_error:
+                logger.error(f"❌ Failed to create DataFrame: {str(df_error)}")
+                return 0.0
             
-            # Convert to float
-            df[['open', 'high', 'low', 'close', 'volume']] = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            # Convert to float and validate
+            try:
+                df[['open', 'high', 'low', 'close', 'volume']] = df[['open', 'high', 'low', 'close', 'volume']].astype(float)
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            except Exception as convert_error:
+                logger.error(f"❌ Failed to convert data types: {str(convert_error)}")
+                return 0.0
             
-            # Calculate ATR
-            df['previous_close'] = df['close'].shift(1)
-            df['tr'] = df[['high', 'low', 'previous_close']].apply(
-                lambda x: max(
-                    x['high'] - x['low'],
-                    abs(x['high'] - x['previous_close']),
-                    abs(x['low'] - x['previous_close'])
-                ), axis=1
-            )
+            # Validate data quality
+            if df[['high', 'low', 'close']].isnull().any().any():
+                logger.warning(f"⚠️ Missing data in klines, attempting to fill...")
+                df[['high', 'low', 'close']] = df[['high', 'low', 'close']].ffill()
+            
+            # Calculate True Range (TR)
+            try:
+                df['previous_close'] = df['close'].shift(1)
+                df['tr'] = df[['high', 'low', 'previous_close']].apply(
+                    lambda x: max(
+                        x['high'] - x['low'],
+                        abs(x['high'] - x['previous_close']),
+                        abs(x['low'] - x['previous_close'])
+                    ), axis=1
+                )
+            except Exception as tr_error:
+                logger.error(f"❌ Failed to calculate True Range: {str(tr_error)}")
+                return 0.0
+            
+            # Validate TR values
+            if df['tr'].isnull().any() or (df['tr'] < 0).any():
+                logger.warning(f"⚠️ Invalid TR values detected, cleaning...")
+                df['tr'] = df['tr'].fillna(0)
+                df['tr'] = df['tr'].clip(lower=0)
             
             # Wilder's ATR (EMA with alpha=1/period)
-            df['ATR'] = df['tr'].ewm(alpha=1/period, adjust=False).mean()
+            try:
+                df['ATR'] = df['tr'].ewm(alpha=1/period, adjust=False).mean()
+            except Exception as atr_error:
+                logger.error(f"❌ Failed to calculate ATR: {str(atr_error)}")
+                return 0.0
             
+            # Get the latest ATR value
             atr_value = df['ATR'].iloc[-1]
-            logger.info(f"Calculated ATR (1h, {period}) for {formatted_symbol}: {atr_value:.4f}")
-            return atr_value
+            
+            # Validate ATR value
+            if pd.isna(atr_value) or atr_value <= 0:
+                logger.warning(f"⚠️ Invalid ATR value calculated: {atr_value}")
+                logger.warning(f"   This may indicate data quality issues")
+                return 0.0
+            
+            logger.info(f"✅ ATR calculated successfully for {formatted_symbol}")
+            logger.info(f"   Period: {period}")
+            logger.info(f"   ATR Value: {atr_value:.6f}")
+            logger.info(f"   Data Points Used: {len(df)}")
+            
+            return float(atr_value)
                 
         except Exception as e:
-            logger.error(f"ATR calculation failed for {symbol}: {str(e)}")
+            logger.error(f"❌ ATR calculation failed for {symbol}: {str(e)}")
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f"Full traceback:")
+            logger.error(traceback.format_exc())
             return 0.0
     
     def place_order(self, symbol, side, order_type="MARKET", quantity=None, product_type='USDT-FUTURES'):
@@ -559,76 +617,205 @@ class BinanceHandler:
             
             logger.info(f"✅ Order placed successfully!")
             logger.info(f"   Order ID: {order_result['orderId']}")
+            logger.info(f"   Order Status: {order_result.get('status', 'N/A')}")
+            logger.info(f"   Order Response Keys: {list(order_result.keys())}")
             
-            # Get current price for notification
-            current_price = float(order_result.get('avgPrice', self.get_symbol_price(formatted_symbol)))
+            # Get current price for notification and TP/SL
+            # Try multiple sources for entry price
+            current_price = 0.0
+            
+            # Method 1: Try avgPrice from order result
+            if 'avgPrice' in order_result and float(order_result.get('avgPrice', 0)) > 0:
+                current_price = float(order_result['avgPrice'])
+                logger.info(f"📊 Entry price from order avgPrice: ${current_price:.2f}")
+            # Method 2: Try price from order result
+            elif 'price' in order_result and float(order_result.get('price', 0)) > 0:
+                current_price = float(order_result['price'])
+                logger.info(f"📊 Entry price from order price: ${current_price:.2f}")
+            # Method 3: Get current market price
+            else:
+                logger.warning(f"⚠️ No avgPrice in order result, fetching current market price...")
+                current_price = self.get_symbol_price(formatted_symbol)
+                if current_price > 0:
+                    logger.info(f"📊 Entry price from market: ${current_price:.2f}")
+                else:
+                    logger.error(f"❌ Failed to get entry price from all sources!")
+                    logger.error(f"   Order result: {order_result}")
+                    # Try to get from position info as last resort
+                    time.sleep(0.5)  # Wait a bit for position to settle
+                    positions = self.get_open_positions()
+                    for pos in positions:
+                        if pos.get('symbol') == formatted_symbol:
+                            pos_price = float(pos.get('entryPrice', 0))
+                            if pos_price > 0:
+                                current_price = pos_price
+                                logger.info(f"📊 Entry price from position info: ${current_price:.2f}")
+                                break
+            
+            if current_price <= 0:
+                logger.error(f"❌ CRITICAL: Entry price is invalid: ${current_price}")
+                logger.error(f"   Cannot proceed with TP/SL placement")
+                logger.error(f"   Order was placed but TP/SL will be skipped")
+            
             tp_price = None
             sl_price = None
             
             # Place TP/SL orders for open positions
             if action == 'open':
-                try:
-                    # Get ATR value using 1h data
-                    atr_period = self.tp_sl_manager.get_atr_period(symbol)
-                    atr_value = self.get_atr(formatted_symbol, atr_period)
+                # Skip TP/SL if entry price is invalid
+                if current_price <= 0:
+                    logger.error(f"❌ Skipping TP/SL placement - invalid entry price: ${current_price}")
+                    logger.error(f"   Order was placed successfully but TP/SL cannot be calculated")
+                else:
+                    logger.info(f"🔒 ========== TP/SL ORDER PLACEMENT START ==========")
+                    logger.info(f"   Symbol: {formatted_symbol}")
+                    logger.info(f"   Position Side: {position_side}")
+                    logger.info(f"   Direction: {direction}")
+                    logger.info(f"   Entry Price: ${current_price:.2f}")
                     
-                    if atr_value > 0:
+                    try:
+                        # Wait for position to be fully opened (delay)
+                        logger.info(f"⏳ Step 1/6: Waiting 0.5s for position to settle...")
+                        time.sleep(0.5)
+                        
+                        # Verify position exists (non-blocking - just for info)
+                        logger.info(f"⏳ Step 2/6: Verifying position exists...")
+                        position_verified = self._wait_for_position_opening(formatted_symbol, position_side, max_wait=1.5)
+                        
+                        if position_verified:
+                            logger.info(f"✅ Position verified successfully")
+                        else:
+                            logger.warning(f"⚠️ Position verification timeout, but continuing anyway...")
+                        
+                        # Get ATR value using 1h data
+                        logger.info(f"⏳ Step 3/6: Calculating ATR...")
+                        atr_period = self.tp_sl_manager.get_atr_period(symbol)
+                        logger.info(f"   ATR Period: {atr_period}")
+                        
+                        atr_value = self.get_atr(formatted_symbol, atr_period)
+                        
+                        if atr_value <= 0:
+                            logger.error(f"❌ ATR calculation failed or returned 0: {atr_value}")
+                            logger.error(f"   This will prevent TP/SL order placement")
+                            logger.error(f"   Please check market data availability for {formatted_symbol}")
+                            raise ValueError(f"ATR value is invalid: {atr_value}")
+                        
+                        logger.info(f"✅ ATR calculated successfully: {atr_value:.6f}")
+                        
                         # Calculate TP/SL prices
+                        logger.info(f"⏳ Step 4/6: Calculating TP/SL prices...")
                         tp_price, sl_price = self.tp_sl_manager.calculate_tp_sl_prices(
                             symbol, current_price, atr_value, direction
                         )
                         
+                        logger.info(f"📊 TP/SL Price Calculation Results:")
+                        logger.info(f"   Entry Price: ${current_price:.2f}")
+                        logger.info(f"   ATR Value: {atr_value:.6f}")
+                        logger.info(f"   TP Price: ${tp_price:.2f}")
+                        logger.info(f"   SL Price: ${sl_price:.2f}")
+                        
                         # Validate TP/SL logic
+                        logger.info(f"⏳ Step 5/6: Validating TP/SL logic...")
                         is_valid = self.tp_sl_manager.validate_tp_sl_logic(
                             symbol, direction, current_price, tp_price, sl_price
                         )
                         
-                        if is_valid:
-                            # Place TP order
-                            tp_side = 'SELL' if direction == 'long' else 'BUY'
-                            
-                            tp_params = {
-                                'symbol': formatted_symbol,
-                                'side': tp_side,
-                                'type': 'TAKE_PROFIT_MARKET',
-                                'stopPrice': tp_price,
-                                'closePosition': True
-                            }
-                            
-                            if is_hedge_mode:
-                                tp_params['positionSide'] = position_side
-                            
-                            tp_order = self.client.futures_create_order(**tp_params)
-                            logger.info(f"✅ TP order placed: ${tp_price:.2f}")
-                            
-                            # Place SL order
-                            sl_params = {
-                                'symbol': formatted_symbol,
-                                'side': tp_side,
-                                'type': 'STOP_MARKET',
-                                'stopPrice': sl_price,
-                                'closePosition': True
-                            }
-                            
-                            if is_hedge_mode:
-                                sl_params['positionSide'] = position_side
-                            
-                            sl_order = self.client.futures_create_order(**sl_params)
-                            logger.info(f"✅ SL order placed: ${sl_price:.2f}")
-                        else:
-                            logger.warning(f"⚠️ TP/SL validation failed, skipping TP/SL orders")
-                    else:
-                        logger.warning(f"⚠️ ATR value is 0, skipping TP/SL orders")
+                        if not is_valid:
+                            logger.error(f"❌ TP/SL validation FAILED!")
+                            logger.error(f"   Entry: ${current_price:.2f}")
+                            logger.error(f"   TP: ${tp_price:.2f}")
+                            logger.error(f"   SL: ${sl_price:.2f}")
+                            logger.error(f"   Direction: {direction}")
+                            logger.error(f"   Please check TP/SL multipliers in configuration")
+                            raise ValueError("TP/SL validation failed")
                         
-                except Exception as tp_sl_error:
-                    logger.error(f"❌ Error placing TP/SL: {str(tp_sl_error)}")
-                    import traceback
-                    logger.error(traceback.format_exc())
+                        logger.info(f"✅ TP/SL validation PASSED")
+                        
+                        # Prepare TP/SL order parameters
+                        tp_side = 'SELL' if direction == 'long' else 'BUY'
+                        
+                        # Round stop prices to proper precision
+                        tp_price_rounded = self.tp_sl_manager._round_to_price_step(symbol, tp_price)
+                        sl_price_rounded = self.tp_sl_manager._round_to_price_step(symbol, sl_price)
+                        
+                        logger.info(f"📊 Rounded Prices:")
+                        logger.info(f"   TP: ${tp_price:.6f} -> ${tp_price_rounded:.6f}")
+                        logger.info(f"   SL: ${sl_price:.6f} -> ${sl_price_rounded:.6f}")
+                        
+                        tp_params = {
+                            'symbol': formatted_symbol,
+                            'side': tp_side,
+                            'type': 'TAKE_PROFIT_MARKET',
+                            'stopPrice': tp_price_rounded,
+                            'closePosition': True
+                        }
+                        
+                        sl_params = {
+                            'symbol': formatted_symbol,
+                            'side': tp_side,
+                            'type': 'STOP_MARKET',
+                            'stopPrice': sl_price_rounded,
+                            'closePosition': True
+                        }
+                        
+                        if is_hedge_mode:
+                            tp_params['positionSide'] = position_side
+                            sl_params['positionSide'] = position_side
+                            logger.info(f"   Using Hedge Mode - positionSide: {position_side}")
+                        else:
+                            logger.info(f"   Using One-Way Mode")
+                        
+                        logger.info(f"⏳ Step 6/6: Placing TP/SL orders with retry mechanism...")
+                        logger.info(f"   TP Params: {tp_params}")
+                        logger.info(f"   SL Params: {sl_params}")
+                        
+                        # Place TP/SL orders with retry
+                        tp_order, sl_order = self._place_tp_sl_with_retry(
+                            formatted_symbol, tp_params, sl_params, position_side, max_retries=3
+                        )
+                        
+                        # Check results
+                        if tp_order:
+                            logger.info(f"✅✅✅ TP ORDER SUCCESSFULLY PLACED! ✅✅✅")
+                            logger.info(f"   Order ID: {tp_order.get('orderId', 'N/A')}")
+                            logger.info(f"   Stop Price: ${tp_price_rounded:.2f}")
+                        else:
+                            logger.error(f"❌❌❌ TP ORDER FAILED AFTER ALL RETRIES ❌❌❌")
+                            logger.error(f"   This is a critical error - TP order was not placed!")
+                        
+                        if sl_order:
+                            logger.info(f"✅✅✅ SL ORDER SUCCESSFULLY PLACED! ✅✅✅")
+                            logger.info(f"   Order ID: {sl_order.get('orderId', 'N/A')}")
+                            logger.info(f"   Stop Price: ${sl_price_rounded:.2f}")
+                        else:
+                            logger.error(f"❌❌❌ SL ORDER FAILED AFTER ALL RETRIES ❌❌❌")
+                            logger.error(f"   This is a critical error - SL order was not placed!")
+                        
+                        # Update prices for notification (use rounded prices)
+                        if tp_order and sl_order:
+                            tp_price = tp_price_rounded
+                            sl_price = sl_price_rounded
+                            logger.info(f"🔒 ========== TP/SL ORDER PLACEMENT COMPLETE ==========")
+                        else:
+                            logger.error(f"🔒 ========== TP/SL ORDER PLACEMENT INCOMPLETE ==========")
+                            logger.error(f"   TP Order: {'✅' if tp_order else '❌'}")
+                            logger.error(f"   SL Order: {'✅' if sl_order else '❌'}")
+                            
+                    except Exception as tp_sl_error:
+                        logger.error(f"❌❌❌ CRITICAL ERROR IN TP/SL PLACEMENT ❌❌❌")
+                        logger.error(f"   Error: {str(tp_sl_error)}")
+                        logger.error(f"   Error Type: {type(tp_sl_error).__name__}")
+                        import traceback
+                        logger.error(f"Full traceback:")
+                        logger.error(traceback.format_exc())
+                        logger.error(f"⚠️ Main order was placed successfully, but TP/SL orders failed")
+                        logger.error(f"   Please check logs above for details")
+                        logger.error(f"🔒 ========== TP/SL ORDER PLACEMENT FAILED ==========")
             
             # Send notification AFTER order is placed (independent of TP/SL success)
             try:
                 tp_sl_data = None
-                if tp_price and sl_price:
+                if tp_price and sl_price and current_price > 0:
                     tp_sl_data = {'tp_price': tp_price, 'sl_price': sl_price, 'direction': direction}
                 
                 self._send_enhanced_notification(
@@ -649,6 +836,227 @@ class BinanceHandler:
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             return {"error": str(e)}
+    
+    def _wait_for_position_opening(self, symbol: str, position_side: str, max_wait: float = 2.0, check_interval: float = 0.5) -> bool:
+        """
+        Wait for position to be fully opened after order placement
+        
+        Args:
+            symbol (str): Trading symbol
+            position_side (str): Position side ('LONG' or 'SHORT')
+            max_wait (float): Maximum time to wait in seconds
+            check_interval (float): Interval between checks in seconds
+            
+        Returns:
+            bool: True if position exists, False if timeout
+        """
+        try:
+            formatted_symbol = self._format_symbol(symbol)
+            elapsed = 0.0
+            
+            logger.info(f"⏳ Waiting for position to open: {formatted_symbol} {position_side}")
+            
+            while elapsed < max_wait:
+                time.sleep(check_interval)
+                elapsed += check_interval
+                
+                # Check if position exists
+                if self._verify_position_exists(formatted_symbol, position_side):
+                    logger.info(f"✅ Position verified after {elapsed:.1f}s")
+                    return True
+            
+            logger.warning(f"⚠️ Position verification timeout after {max_wait}s")
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ Error waiting for position: {str(e)}")
+            return False
+    
+    def _verify_position_exists(self, symbol: str, position_side: str) -> bool:
+        """
+        Verify that a position exists for the given symbol and side
+        
+        Args:
+            symbol (str): Trading symbol
+            position_side (str): Position side ('LONG' or 'SHORT')
+            
+        Returns:
+            bool: True if position exists, False otherwise
+        """
+        try:
+            positions = self.get_open_positions()
+            
+            for pos in positions:
+                pos_symbol = pos.get('symbol', '')
+                pos_side = pos.get('positionSide', '')
+                position_amt = abs(float(pos.get('positionAmt', '0')))
+                
+                if pos_symbol == symbol and position_amt > 0:
+                    # Check position side match
+                    if pos_side == position_side:
+                        logger.debug(f"✅ Position verified: {symbol} {position_side} ({position_amt})")
+                        return True
+                    # For one-way mode, positionSide is 'BOTH', check positionAmt sign
+                    elif pos_side == 'BOTH':
+                        actual_side = 'LONG' if float(pos.get('positionAmt', '0')) > 0 else 'SHORT'
+                        if actual_side == position_side:
+                            logger.debug(f"✅ Position verified (one-way): {symbol} {position_side} ({position_amt})")
+                            return True
+            
+            logger.debug(f"⚠️ Position not found: {symbol} {position_side}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ Error verifying position: {str(e)}")
+            return False
+    
+    def _determine_position_side(self, position_amt: float, position_side: str) -> str:
+        """
+        Determine position side from positionAmt and positionSide
+        
+        Args:
+            position_amt (float): Position amount (can be negative for short)
+            position_side (str): Position side from API ('LONG', 'SHORT', or 'BOTH')
+            
+        Returns:
+            str: 'LONG' or 'SHORT'
+        """
+        if position_side in ['LONG', 'SHORT']:
+            return position_side
+        
+        # One-way mode: determine from positionAmt sign
+        return 'LONG' if position_amt > 0 else 'SHORT'
+    
+    def _place_tp_sl_with_retry(self, symbol: str, tp_params: dict, sl_params: dict, 
+                                position_side: str, max_retries: int = 3) -> tuple:
+        """
+        Place TP/SL orders with retry mechanism
+        
+        Args:
+            symbol (str): Trading symbol
+            tp_params (dict): TP order parameters
+            sl_params (dict): SL order parameters
+            position_side (str): Position side
+            max_retries (int): Maximum number of retry attempts
+            
+        Returns:
+            tuple: (tp_order_result, sl_order_result) or (None, None) if failed
+        """
+        tp_order = None
+        sl_order = None
+        
+        logger.info(f"🔄 Starting TP/SL retry mechanism for {symbol}")
+        logger.info(f"   Max Retries: {max_retries}")
+        
+        # Place TP order with retry
+        logger.info(f"📤 Attempting to place TP order...")
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"   Attempt {attempt + 1}/{max_retries}")
+                logger.debug(f"   TP Params: {tp_params}")
+                
+                tp_order = self.client.futures_create_order(**tp_params)
+                
+                logger.info(f"✅ TP order placed successfully!")
+                logger.info(f"   Order ID: {tp_order.get('orderId', 'N/A')}")
+                logger.info(f"   Order Status: {tp_order.get('status', 'N/A')}")
+                logger.info(f"   Stop Price: ${tp_params.get('stopPrice', 0):.2f}")
+                logger.debug(f"   Full Response: {tp_order}")
+                break
+                
+            except Exception as tp_error:
+                error_msg = str(tp_error)
+                error_code = None
+                
+                # Try to extract error code if it's a BinanceAPIException
+                if hasattr(tp_error, 'code'):
+                    error_code = tp_error.code
+                elif '-2010' in error_msg or '-2011' in error_msg:
+                    # Common Binance error codes
+                    import re
+                    code_match = re.search(r'-(\d{4})', error_msg)
+                    if code_match:
+                        error_code = code_match.group(1)
+                
+                logger.warning(f"⚠️ TP order attempt {attempt + 1} failed")
+                logger.warning(f"   Error: {error_msg}")
+                if error_code:
+                    logger.warning(f"   Error Code: {error_code}")
+                
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 0.5  # Exponential backoff
+                    logger.info(f"   Waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"❌ TP order failed after {max_retries} attempts")
+                    logger.error(f"   Final Error: {error_msg}")
+                    if error_code:
+                        logger.error(f"   Error Code: {error_code}")
+                        if error_code == '2010':
+                            logger.error(f"   This usually means: New order rejected")
+                        elif error_code == '2011':
+                            logger.error(f"   This usually means: Unknown order sent")
+                    import traceback
+                    logger.error(f"   Full traceback:")
+                    logger.error(traceback.format_exc())
+        
+        # Place SL order with retry (independent of TP)
+        logger.info(f"📤 Attempting to place SL order...")
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"   Attempt {attempt + 1}/{max_retries}")
+                logger.debug(f"   SL Params: {sl_params}")
+                
+                sl_order = self.client.futures_create_order(**sl_params)
+                
+                logger.info(f"✅ SL order placed successfully!")
+                logger.info(f"   Order ID: {sl_order.get('orderId', 'N/A')}")
+                logger.info(f"   Order Status: {sl_order.get('status', 'N/A')}")
+                logger.info(f"   Stop Price: ${sl_params.get('stopPrice', 0):.2f}")
+                logger.debug(f"   Full Response: {sl_order}")
+                break
+                
+            except Exception as sl_error:
+                error_msg = str(sl_error)
+                error_code = None
+                
+                # Try to extract error code if it's a BinanceAPIException
+                if hasattr(sl_error, 'code'):
+                    error_code = sl_error.code
+                elif '-2010' in error_msg or '-2011' in error_msg:
+                    # Common Binance error codes
+                    import re
+                    code_match = re.search(r'-(\d{4})', error_msg)
+                    if code_match:
+                        error_code = code_match.group(1)
+                
+                logger.warning(f"⚠️ SL order attempt {attempt + 1} failed")
+                logger.warning(f"   Error: {error_msg}")
+                if error_code:
+                    logger.warning(f"   Error Code: {error_code}")
+                
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 0.5  # Exponential backoff
+                    logger.info(f"   Waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"❌ SL order failed after {max_retries} attempts")
+                    logger.error(f"   Final Error: {error_msg}")
+                    if error_code:
+                        logger.error(f"   Error Code: {error_code}")
+                        if error_code == '2010':
+                            logger.error(f"   This usually means: New order rejected")
+                        elif error_code == '2011':
+                            logger.error(f"   This usually means: Unknown order sent")
+                    import traceback
+                    logger.error(f"   Full traceback:")
+                    logger.error(traceback.format_exc())
+        
+        logger.info(f"🔄 TP/SL retry mechanism completed")
+        logger.info(f"   TP Order: {'✅ Success' if tp_order else '❌ Failed'}")
+        logger.info(f"   SL Order: {'✅ Success' if sl_order else '❌ Failed'}")
+        
+        return tp_order, sl_order
     
     def get_open_positions(self):
         """Get all open positions from Binance Futures
@@ -758,17 +1166,69 @@ class BinanceHandler:
                 if position_amt == 0:
                     continue
                 
-                side = pos.get('positionSide', 'BOTH')
+                symbol = pos.get('symbol', 'UNKNOWN')
+                
+                # Determine position side correctly
+                position_side_api = pos.get('positionSide', 'BOTH')
+                side = self._determine_position_side(position_amt, position_side_api)
+                
                 entry_price = float(pos.get('entryPrice', '0'))
                 mark_price = float(pos.get('markPrice', '0'))
-                unrealized_pnl = float(pos.get('unrealizedProfit', '0'))
+                
+                # Debug: Log all available fields for troubleshooting
+                logger.debug(f"📊 Processing position: {symbol} {side}")
+                logger.debug(f"   Raw position data keys: {list(pos.keys())}")
+                logger.debug(f"   positionAmt: {position_amt}")
+                logger.debug(f"   entryPrice: {entry_price}")
+                logger.debug(f"   markPrice: {mark_price}")
+                
+                # Try to get unrealized PnL from API (check multiple possible field names)
+                unrealized_pnl_api = float(pos.get('unrealizedProfit', pos.get('unRealizedProfit', pos.get('unrealizedPnl', '0'))))
+                logger.debug(f"   unrealizedProfit (API): {unrealized_pnl_api}")
+                
+                # Calculate PnL manually for verification
+                unrealized_pnl_calculated = 0.0
+                if entry_price > 0 and mark_price > 0:
+                    if side == 'LONG':
+                        # Long: profit = (mark_price - entry_price) * position_amt
+                        unrealized_pnl_calculated = (mark_price - entry_price) * position_amt
+                    else:  # SHORT
+                        # Short: profit = (entry_price - mark_price) * abs(position_amt)
+                        # Note: position_amt is negative for short positions
+                        unrealized_pnl_calculated = (entry_price - mark_price) * abs(position_amt)
+                    
+                    logger.debug(f"   Calculated PnL: ${unrealized_pnl_calculated:.2f}")
+                
+                # Use API value if available and reasonable, otherwise use calculated value
+                # If API value is 0 but calculated value is not, use calculated value
+                if abs(unrealized_pnl_api) < 0.01 and abs(unrealized_pnl_calculated) >= 0.01:
+                    logger.info(f"📊 Using calculated PnL for {symbol} {side}")
+                    logger.info(f"   API PnL: ${unrealized_pnl_api:.2f}, Calculated: ${unrealized_pnl_calculated:.2f}")
+                    unrealized_pnl = unrealized_pnl_calculated
+                elif abs(unrealized_pnl_api) >= 0.01:
+                    unrealized_pnl = unrealized_pnl_api
+                    logger.debug(f"   Using API PnL: ${unrealized_pnl:.2f}")
+                else:
+                    # Both are essentially 0
+                    unrealized_pnl = unrealized_pnl_calculated
+                    logger.debug(f"   Both API and calculated PnL are ~0, using calculated: ${unrealized_pnl:.2f}")
+                
                 leverage = int(pos.get('leverage', '1'))
                 
-                # Calculate PnL percentage
-                if entry_price > 0:
-                    pnl_percentage = (unrealized_pnl / (abs(position_amt) * entry_price)) * 100 * leverage
+                # Calculate PnL percentage correctly (without leverage multiplication)
+                # PnL percentage = (price_change / entry_price) * 100
+                pnl_percentage = 0.0
+                
+                if entry_price > 0 and mark_price > 0:
+                    if side == 'LONG':
+                        # Long: profit when mark_price > entry_price
+                        pnl_percentage = ((mark_price - entry_price) / entry_price) * 100
+                    else:  # SHORT
+                        # Short: profit when entry_price > mark_price
+                        pnl_percentage = ((entry_price - mark_price) / entry_price) * 100
                 else:
-                    pnl_percentage = 0
+                    logger.warning(f"⚠️ Invalid prices for {pos.get('symbol', 'UNKNOWN')}: entry={entry_price}, mark={mark_price}")
+                    pnl_percentage = 0.0
                 
                 formatted_pos = {
                     'symbol': pos['symbol'],
@@ -783,12 +1243,16 @@ class BinanceHandler:
                     'liquidation_price': f"${float(pos.get('liquidationPrice', '0')):.4f}"
                 }
                 
+                logger.debug(f"📊 Position formatted: {pos['symbol']} {side} - PnL: ${unrealized_pnl:.2f} ({pnl_percentage:.2f}%)")
                 formatted_positions.append(formatted_pos)
             
+            logger.info(f"✅ Formatted {len(formatted_positions)} positions for dashboard")
             return formatted_positions
             
         except Exception as e:
-            logger.error(f"Error formatting positions: {str(e)}")
+            logger.error(f"❌ Error formatting positions: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             return []
     
     def monitor_positions(self):
@@ -834,17 +1298,24 @@ class BinanceHandler:
                 tp_price = tp_sl_data['tp_price']
                 sl_price = tp_sl_data['sl_price']
                 
-                if direction == 'LONG':
-                    tp_pct = ((tp_price - price) / price) * 100
-                    sl_pct = ((price - sl_price) / price) * 100
+                if price > 0:  # Prevent division by zero
+                    if direction == 'LONG':
+                        tp_pct = ((tp_price - price) / price) * 100
+                        sl_pct = ((price - sl_price) / price) * 100
+                    else:
+                        tp_pct = ((price - tp_price) / price) * 100
+                        sl_pct = ((sl_price - price) / price) * 100
+                    
+                    message += (
+                        f"🎯 Take Profit: ${tp_price:.2f} (+{tp_pct:.1f}%)\n"
+                        f"🛡️ Stop Loss: ${sl_price:.2f} (-{sl_pct:.1f}%)\n"
+                    )
                 else:
-                    tp_pct = ((price - tp_price) / price) * 100
-                    sl_pct = ((sl_price - price) / price) * 100
-                
-                message += (
-                    f"🎯 Take Profit: ${tp_price:.2f} (+{tp_pct:.1f}%)\n"
-                    f"🛡️ Stop Loss: ${sl_price:.2f} (-{sl_pct:.1f}%)\n"
-                )
+                    message += (
+                        f"🎯 Take Profit: ${tp_price:.2f}\n"
+                        f"🛡️ Stop Loss: ${sl_price:.2f}\n"
+                        f"⚠️ Entry price was invalid, percentages not calculated\n"
+                    )
             
             # Send Telegram notification
             try:
