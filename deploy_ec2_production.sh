@@ -27,7 +27,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 APP_NAME="tony_binance"
-APP_DIR="/home/ubuntu/tony_binance"
+APP_DIR="/home/ubuntu/tony_binance/tony_binance"
 APP_USER="ubuntu"
 APP_PORT="5001"
 DOMAIN="cryptosynapse.net"
