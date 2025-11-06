@@ -1,0 +1,543 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Binance Trading Bot{% endblock %}
+
+{% block content %}
+<div class="container dashboard">
+    <!-- Account Overview -->
+    <div class="stats-grid">
+        <div class="stat-card usdt-card">
+            <div class="stat-icon">
+                <i class="fas fa-dollar-sign"></i>
+            </div>
+            <div class="stat-content">
+                <h3>USDT Balance</h3>
+                <p class="stat-value">${{ "{:,.2f}".format(account_balance) }}</p>
+                <small>Equity: ${{ "{:,.2f}".format(equity) }}</small>
+            </div>
+        </div>
+        
+        <div class="stat-card usdc-card">
+            <div class="stat-icon">
+                <i class="fas fa-coins"></i>
+            </div>
+            <div class="stat-content">
+                <h3>USDC Balance</h3>
+                <p class="stat-value">${{ "{:,.2f}".format(usdc_balance) }}</p>
+                <small>Equity: ${{ "{:,.2f}".format(usdc_equity) }}</small>
+            </div>
+        </div>
+        
+        <div class="stat-card pnl-card {% if unrealized_pnl + usdc_unrealized_pnl >= 0 %}profit{% else %}loss{% endif %}">
+            <div class="stat-icon">
+                <i class="fas fa-chart-line"></i>
+            </div>
+            <div class="stat-content">
+                <h3>Unrealized PnL</h3>
+                <p class="stat-value">${{ "{:,.2f}".format(unrealized_pnl + usdc_unrealized_pnl) }}</p>
+                <small>Combined</small>
+            </div>
+        </div>
+        
+        <div class="stat-card positions-card">
+            <div class="stat-icon">
+                <i class="fas fa-exchange-alt"></i>
+            </div>
+            <div class="stat-content">
+                <h3>Open Positions</h3>
+                <p class="stat-value">{{ positions|length }}</p>
+                <small>Active</small>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Trading Status -->
+    <div class="status-bar">
+        <div class="status-item">
+            <span class="status-label">Trading:</span>
+            <span class="status-badge {% if config.enable_trading %}active{% else %}inactive{% endif %}">
+                {{ 'ENABLED' if config.enable_trading else 'DISABLED' }}
+            </span>
+        </div>
+        <div class="status-item">
+            <span class="status-label">Auto Switch:</span>
+            <span class="status-badge {% if config.auto_position_switch %}active{% else %}inactive{% endif %}">
+                {{ 'ON' if config.auto_position_switch else 'OFF' }}
+            </span>
+        </div>
+        <div class="status-item">
+            <span class="status-label">Max Positions:</span>
+            <span class="status-value">{{ config.max_open_positions }}</span>
+        </div>
+        <div class="status-item">
+            <button class="btn btn-refresh" onclick="location.reload()">
+                <i class="fas fa-sync-alt"></i> Refresh
+            </button>
+        </div>
+    </div>
+    
+    <!-- Active USDT-M Coins Section -->
+    <div class="coins-section">
+        <h2 class="section-title collapsible" onclick="toggleSection('usdt-section')">
+            <i class="fas fa-dollar-sign" style="color: #10b981;"></i>
+            Active USDT-M Coins
+            <i class="fas fa-chevron-down chevron" id="usdt-chevron"></i>
+        </h2>
+        
+        <div class="coins-grid active-coins" id="usdt-section">
+            {% if config.btc_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fab fa-bitcoin" style="color: #f7931a; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>BTC</h4>
+                    <p>{{ config.btc_order_size_percentage }}% | {{ config.btc_leverage }}x</p>
+                </div>
+                <span class="badge-active">Active</span>
+            </div>
+            {% endif %}
+            
+            {% if config.eth_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fab fa-ethereum" style="color: #627eea; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>ETH</h4>
+                    <p>{{ config.eth_order_size_percentage }}% | {{ config.eth_leverage }}x</p>
+                </div>
+                <span class="badge-active">Active</span>
+            </div>
+            {% endif %}
+            
+            {% if config.xrp_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-water" style="color: #00AAE4; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>XRP</h4>
+                    <p>{{ config.xrp_order_size_percentage }}% | {{ config.xrp_leverage }}x</p>
+                </div>
+                <span class="badge-active">Active</span>
+            </div>
+            {% endif %}
+            
+            {% if config.ada_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-heart" style="color: #0033AD; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>ADA</h4>
+                    <p>{{ config.ada_order_size_percentage }}% | {{ config.ada_leverage }}x</p>
+                </div>
+                <span class="badge-active">Active</span>
+            </div>
+            {% endif %}
+            
+            {% if config.dot_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-circle" style="color: #E6007A; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>DOT</h4>
+                    <p>{{ config.dot_order_size_percentage }}% | {{ config.dot_leverage }}x</p>
+                </div>
+                <span class="badge-active">Active</span>
+            </div>
+            {% endif %}
+            
+            {% if config.xlm_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-star" style="color: #14B6E7; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>XLM</h4>
+                    <p>{{ config.xlm_order_size_percentage }}% | {{ config.xlm_leverage }}x</p>
+                </div>
+                <span class="badge-active">Active</span>
+            </div>
+            {% endif %}
+            
+            {% if config.imx_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-gem" style="color: #00D4AA; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>IMX</h4>
+                    <p>{{ config.imx_order_size_percentage }}% | {{ config.imx_leverage }}x</p>
+                </div>
+                <span class="badge-active">Active</span>
+            </div>
+            {% endif %}
+            
+            {% if config.doge_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-dog" style="color: #C2A633; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>DOGE</h4>
+                    <p>{{ config.doge_order_size_percentage }}% | {{ config.doge_leverage }}x</p>
+                </div>
+                <span class="badge-active">Active</span>
+            </div>
+            {% endif %}
+            
+            {% if config.inj_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-syringe" style="color: #00D4FF; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>INJ</h4>
+                    <p>{{ config.inj_order_size_percentage }}% | {{ config.inj_leverage }}x</p>
+                </div>
+                <span class="badge-active">Active</span>
+            </div>
+            {% endif %}
+            
+            {% if config.ldo_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-layer-group" style="color: #00A3FF; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>LDO</h4>
+                    <p>{{ config.ldo_order_size_percentage }}% | {{ config.ldo_leverage }}x</p>
+                </div>
+                <span class="badge-active">Active</span>
+            </div>
+            {% endif %}
+            
+            {% if config.arb_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-shapes" style="color: #28A0F0; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>ARB</h4>
+                    <p>{{ config.arb_order_size_percentage }}% | {{ config.arb_leverage }}x</p>
+                </div>
+                <span class="badge-active">Active</span>
+            </div>
+            {% endif %}
+            
+            {% if config.uni_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-unicorn" style="color: #FF007A; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>UNI</h4>
+                    <p>{{ config.uni_order_size_percentage }}% | {{ config.uni_leverage }}x</p>
+                </div>
+                <span class="badge-active">Active</span>
+            </div>
+            {% endif %}
+            
+            {% if config.sol_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-sun" style="color: #00FFA3; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>SOL</h4>
+                    <p>{{ config.sol_order_size_percentage }}% | {{ config.sol_leverage }}x</p>
+                </div>
+                <span class="badge-active">Active</span>
+            </div>
+            {% endif %}
+            
+            {% if config.bnb_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-coins" style="color: #F3BA2F; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>BNB</h4>
+                    <p>{{ config.bnb_order_size_percentage }}% | {{ config.bnb_leverage }}x</p>
+                </div>
+                <span class="badge-active">Active</span>
+            </div>
+            {% endif %}
+            
+            {% if config.fet_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-robot" style="color: #8B5CF6; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>FET</h4>
+                    <p>{{ config.fet_order_size_percentage }}% | {{ config.fet_leverage }}x</p>
+                </div>
+                <span class="badge-active">Active</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Active USDC-M Coins Section -->
+    <div class="coins-section">
+        <h2 class="section-title collapsible" onclick="toggleSection('usdc-section')">
+            <i class="fas fa-coins" style="color: #3b82f6;"></i>
+            Active USDC-M Coins
+            <i class="fas fa-chevron-down chevron" id="usdc-chevron"></i>
+        </h2>
+        
+        <div class="coins-grid active-coins" id="usdc-section">
+            {% if config.btcusdc_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fab fa-bitcoin" style="color: #f7931a; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>BTC</h4>
+                    <p>{{ config.btcusdc_order_size_percentage }}% | {{ config.btcusdc_leverage }}x</p>
+                </div>
+                <span class="badge-active usdc">USDC</span>
+            </div>
+            {% endif %}
+            
+            {% if config.ethusdc_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fab fa-ethereum" style="color: #627eea; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>ETH</h4>
+                    <p>{{ config.ethusdc_order_size_percentage }}% | {{ config.ethusdc_leverage }}x</p>
+                </div>
+                <span class="badge-active usdc">USDC</span>
+            </div>
+            {% endif %}
+            
+            {% if config.solusdc_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-sun" style="color: #00FFA3; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>SOL</h4>
+                    <p>{{ config.solusdc_order_size_percentage }}% | {{ config.solusdc_leverage }}x</p>
+                </div>
+                <span class="badge-active usdc">USDC</span>
+            </div>
+            {% endif %}
+            
+            {% if config.aaveusdc_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-ghost" style="color: #B6509E; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>AAVE</h4>
+                    <p>{{ config.aaveusdc_order_size_percentage }}% | {{ config.aaveusdc_leverage }}x</p>
+                </div>
+                <span class="badge-active usdc">USDC</span>
+            </div>
+            {% endif %}
+            
+            {% if config.bchusdc_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-money-bill-wave" style="color: #8DC351; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>BCH</h4>
+                    <p>{{ config.bchusdc_order_size_percentage }}% | {{ config.bchusdc_leverage }}x</p>
+                </div>
+                <span class="badge-active usdc">USDC</span>
+            </div>
+            {% endif %}
+            
+            {% if config.xrpusdc_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-water" style="color: #00AAE4; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>XRP</h4>
+                    <p>{{ config.xrpusdc_order_size_percentage }}% | {{ config.xrpusdc_leverage }}x</p>
+                </div>
+                <span class="badge-active usdc">USDC</span>
+            </div>
+            {% endif %}
+            
+            {% if config.adausdc_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-heart" style="color: #0033AD; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>ADA</h4>
+                    <p>{{ config.adausdc_order_size_percentage }}% | {{ config.adausdc_leverage }}x</p>
+                </div>
+                <span class="badge-active usdc">USDC</span>
+            </div>
+            {% endif %}
+            
+            {% if config.avaxusdc_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-mountain" style="color: #E84142; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>AVAX</h4>
+                    <p>{{ config.avaxusdc_order_size_percentage }}% | {{ config.avaxusdc_leverage }}x</p>
+                </div>
+                <span class="badge-active usdc">USDC</span>
+            </div>
+            {% endif %}
+            
+            {% if config.linkusdc_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-link" style="color: #2A5ADA; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>LINK</h4>
+                    <p>{{ config.linkusdc_order_size_percentage }}% | {{ config.linkusdc_leverage }}x</p>
+                </div>
+                <span class="badge-active usdc">USDC</span>
+            </div>
+            {% endif %}
+            
+            {% if config.arbusdc_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-shapes" style="color: #28A0F0; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>ARB</h4>
+                    <p>{{ config.arbusdc_order_size_percentage }}% | {{ config.arbusdc_leverage }}x</p>
+                </div>
+                <span class="badge-active usdc">USDC</span>
+            </div>
+            {% endif %}
+            
+            {% if config.uniusdc_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-unicorn" style="color: #FF007A; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>UNI</h4>
+                    <p>{{ config.uniusdc_order_size_percentage }}% | {{ config.uniusdc_leverage }}x</p>
+                </div>
+                <span class="badge-active usdc">USDC</span>
+            </div>
+            {% endif %}
+            
+            {% if config.crvusdc_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-circle-notch" style="color: #FF0084; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>CRV</h4>
+                    <p>{{ config.crvusdc_order_size_percentage }}% | {{ config.crvusdc_leverage }}x</p>
+                </div>
+                <span class="badge-active usdc">USDC</span>
+            </div>
+            {% endif %}
+            
+            {% if config.tiausdc_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-moon" style="color: #7B3FE4; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>TIA</h4>
+                    <p>{{ config.tiausdc_order_size_percentage }}% | {{ config.tiausdc_leverage }}x</p>
+                </div>
+                <span class="badge-active usdc">USDC</span>
+            </div>
+            {% endif %}
+            
+            {% if config.bnbusdc_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-coins" style="color: #F3BA2F; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>BNB</h4>
+                    <p>{{ config.bnbusdc_order_size_percentage }}% | {{ config.bnbusdc_leverage }}x</p>
+                </div>
+                <span class="badge-active usdc">USDC</span>
+            </div>
+            {% endif %}
+            
+            {% if config.filusdc_enable_trading %}
+            <div class="active-coin-card">
+                <i class="fas fa-database" style="color: #0090FF; font-size: 2rem;"></i>
+                <div class="coin-info">
+                    <h4>FIL</h4>
+                    <p>{{ config.filusdc_order_size_percentage }}% | {{ config.filusdc_leverage }}x</p>
+                </div>
+                <span class="badge-active usdc">USDC</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Positions Table -->
+    <div class="positions-section">
+        <h2 class="section-title">
+            <i class="fas fa-chart-bar"></i>
+            Open Positions
+        </h2>
+        
+        {% if positions %}
+        <div class="positions-grid">
+            {% for position in positions %}
+            <div class="position-card {{ position.side|lower }}">
+                <div class="position-header">
+                    <div class="position-symbol">
+                        <h3>{{ position.symbol }}</h3>
+                        <span class="position-side {{ position.side|lower }}">
+                            {{ position.side }}
+                        </span>
+                    </div>
+                    <div class="position-pnl {% if position.unrealized_pnl.replace('$', '').replace(',', '')|float >= 0 %}profit{% else %}loss{% endif %}">
+                        {{ position.pnl_percentage }}
+                    </div>
+                </div>
+                
+                <div class="position-details">
+                    <div class="detail-row">
+                        <span>Entry:</span>
+                        <strong>{{ position.entry_price }}</strong>
+                    </div>
+                    <div class="detail-row">
+                        <span>Current:</span>
+                        <strong>{{ position.current_price }}</strong>
+                    </div>
+                    <div class="detail-row">
+                        <span>Size:</span>
+                        <strong>{{ position.size }}</strong>
+                    </div>
+                    <div class="detail-row">
+                        <span>Leverage:</span>
+                        <strong class="leverage-badge">{{ position.leverage }}</strong>
+                    </div>
+                    <div class="detail-row">
+                        <span>PnL:</span>
+                        <strong class="{% if position.unrealized_pnl.replace('$', '').replace(',', '')|float >= 0 %}profit-text{% else %}loss-text{% endif %}">
+                            {{ position.unrealized_pnl }}
+                        </strong>
+                    </div>
+                </div>
+                
+                <form method="POST" action="{{ url_for('close_position') }}" class="position-actions">
+                    <input type="hidden" name="symbol" value="{{ position.symbol }}">
+                    <input type="hidden" name="side" value="{{ position.side }}">
+                    <input type="hidden" name="quantity" value="{{ position.size }}">
+                    <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Close this position?')">
+                        <i class="fas fa-times-circle"></i> Close Position
+                    </button>
+                </form>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <i class="fas fa-inbox"></i>
+            <h3>No Open Positions</h3>
+            <p>Your positions will appear here when trading</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Auto-refresh every 10 seconds
+setInterval(function() {
+    location.reload();
+}, 10000);
+
+// Toggle section collapse
+function toggleSection(sectionId) {
+    const section = document.getElementById(sectionId);
+    const chevronId = sectionId.replace('-section', '-chevron');
+    const chevron = document.getElementById(chevronId);
+    
+    if (section.style.display === 'none') {
+        section.style.display = 'grid';
+        chevron.style.transform = 'rotate(0deg)';
+        localStorage.setItem(sectionId, 'open');
+    } else {
+        section.style.display = 'none';
+        chevron.style.transform = 'rotate(-90deg)';
+        localStorage.setItem(sectionId, 'closed');
+    }
+}
+
+// Restore collapse state from localStorage
+document.addEventListener('DOMContentLoaded', function() {
+    ['usdt-section', 'usdc-section'].forEach(sectionId => {
+        const state = localStorage.getItem(sectionId);
+        const section = document.getElementById(sectionId);
+        const chevronId = sectionId.replace('-section', '-chevron');
+        const chevron = document.getElementById(chevronId);
+        
+        if (state === 'closed') {
+            section.style.display = 'none';
+            chevron.style.transform = 'rotate(-90deg)';
+        } else {
+            section.style.display = 'grid';
+            chevron.style.transform = 'rotate(0deg)';
+        }
+    });
+});
+</script>
+{% endblock %}

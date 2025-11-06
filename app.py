@@ -1,0 +1,520 @@
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
+from flask_login import LoginManager, login_user, logout_user, login_required, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
+import os
+import json
+import threading
+import asyncio
+import time
+from datetime import datetime
+import logging
+import sys
+from threading import Thread, Lock
+import shutil
+
+from models import User, Config, Position
+from binance_handler import BinanceHandler
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("logs/app.log", encoding='utf-8'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'binance_bot_secret_key_change_in_production')
+
+# Add current year to all templates
+@app.context_processor
+def inject_now():
+    return {'now': datetime.now()}
+
+# Configure Flask-Login
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
+
+# Initialize data files
+def init_data_files():
+    if not os.path.exists('data'):
+        os.makedirs('data')
+    
+    if not os.path.exists('data/users.json'):
+        with open('data/users.json', 'w') as f:
+            json.dump({
+                "admin": {
+                    "password": generate_password_hash("admin"),
+                    "is_admin": True
+                }
+            }, f, indent=2)
+    
+    if not os.path.exists('data/positions.json'):
+        with open('data/positions.json', 'w') as f:
+            json.dump([], f)
+
+init_data_files()
+
+# User loader
+@login_manager.user_loader
+def load_user(user_id):
+    try:
+        with open('data/users.json', 'r', encoding='utf-8') as f:
+            content = f.read().strip()
+            if not content:
+                logger.error("users.json is empty in user_loader")
+                return None
+            users = json.loads(content)
+        
+        if user_id in users:
+            return User(user_id, users[user_id].get('is_admin', False))
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error in user_loader: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error in user_loader: {str(e)}")
+    
+    return None
+
+# Binance handler instance
+binance_handler = None
+
+# Thread safety
+webhook_locks = {}
+webhook_locks_lock = Lock()
+
+# Load configuration
+def load_config():
+    config_file = 'data/config.json'
+    backup_file = 'data/config_backup.json'
+    
+    try:
+        if not os.path.exists(config_file):
+            logger.warning(f"Config file {config_file} does not exist, creating default")
+            config_data = create_default_config()
+            save_config_with_backup(config_data)
+        else:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if not content:
+                    logger.warning(f"Config file {config_file} is empty, creating default")
+                    config_data = create_default_config()
+                    save_config_with_backup(config_data)
+                else:
+                    try:
+                        config_data = json.loads(content)
+                    except json.JSONDecodeError as e:
+                        logger.error(f"JSON decode error in {config_file}: {str(e)}")
+                        if os.path.exists(backup_file):
+                            try:
+                                with open(backup_file, 'r', encoding='utf-8') as backup_f:
+                                    backup_content = backup_f.read().strip()
+                                    if backup_content:
+                                        config_data = json.loads(backup_content)
+                                        logger.info("Loaded config from backup")
+                                    else:
+                                        logger.warning("Backup is empty, creating default")
+                                        config_data = create_default_config()
+                                        save_config_with_backup(config_data)
+                            except Exception as backup_err:
+                                logger.error(f"Backup also failed: {str(backup_err)}")
+                                config_data = create_default_config()
+                                save_config_with_backup(config_data)
+                        else:
+                            logger.warning("No backup found, creating default")
+                            config_data = create_default_config()
+                            save_config_with_backup(config_data)
+    except Exception as e:
+        logger.error(f"Error loading config: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        config_data = create_default_config()
+        try:
+            save_config_with_backup(config_data)
+        except Exception as save_err:
+            logger.error(f"Could not save default config: {str(save_err)}")
+    
+    global binance_handler
+    if config_data.get('binance_api_key') and config_data.get('binance_secret_key'):
+        try:
+            binance_handler = BinanceHandler(
+                config_data['binance_api_key'],
+                config_data['binance_secret_key'],
+                config_data
+            )
+        except Exception as handler_err:
+            logger.error(f"Failed to initialize BinanceHandler: {str(handler_err)}")
+    
+    return Config(**config_data)
+
+def create_default_config():
+    """Create default configuration for all 30 coins"""
+    config = {
+        "binance_api_key": "",
+        "binance_secret_key": "",
+        "telegram_bot_token": "",
+        "telegram_chat_id": "",
+        "leverage": 10,
+        "order_size_percentage": 10.0,
+        "max_daily_trades": 30,
+        "max_open_positions": 5,
+        "enable_trading": False,
+        "enable_webhook_close_signals": False,
+        "atr_period": 14,
+        "atr_tp_multiplier": 2.5,
+        "atr_sl_multiplier": 3.0,
+        "auto_position_switch": True,
+        "allow_long_only": False,
+        "allow_short_only": False
+    }
+    
+    # USDT coins
+    usdt_coins = ['btc', 'eth', 'xrp', 'ada', 'dot', 'xlm', 'imx', 'doge', 'inj', 'ldo', 'arb', 'uni', 'sol', 'bnb', 'fet']
+    for coin in usdt_coins:
+        config[f'{coin}_atr_period'] = 14
+        config[f'{coin}_atr_tp_multiplier'] = 2.5
+        config[f'{coin}_atr_sl_multiplier'] = 3.0
+        config[f'{coin}_order_size_percentage'] = 10.0
+        config[f'{coin}_leverage'] = 10
+        config[f'{coin}_enable_trading'] = True
+        config[f'{coin}_product_type'] = 'USDT-FUTURES'
+    
+    # USDC coins
+    usdc_coins = ['btcusdc', 'ethusdc', 'solusdc', 'aaveusdc', 'bchusdc', 'xrpusdc', 'adausdc', 'avaxusdc', 'linkusdc', 'arbusdc', 'uniusdc', 'crvusdc', 'tiausdc', 'bnbusdc', 'filusdc']
+    for coin in usdc_coins:
+        config[f'{coin}_atr_period'] = 14
+        config[f'{coin}_atr_tp_multiplier'] = 2.5
+        config[f'{coin}_atr_sl_multiplier'] = 3.0
+        config[f'{coin}_order_size_percentage'] = 10.0
+        config[f'{coin}_leverage'] = 10
+        config[f'{coin}_enable_trading'] = True
+        config[f'{coin}_product_type'] = 'USDC-FUTURES'
+    
+    return config
+
+def save_config_with_backup(config_data):
+    """Save config with backup"""
+    config_file = 'data/config.json'
+    backup_file = 'data/config_backup.json'
+    
+    try:
+        # Create backup if config exists
+        if os.path.exists(config_file):
+            try:
+                shutil.copy2(config_file, backup_file)
+            except Exception as backup_err:
+                logger.warning(f"Could not create backup: {str(backup_err)}")
+        
+        # Save new config
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(config_data, f, indent=2, ensure_ascii=False)
+        
+        logger.info("Configuration saved successfully")
+    except Exception as e:
+        logger.error(f"Error saving config: {str(e)}")
+        raise
+
+# Telegram notification
+async def send_telegram_notification(message):
+    config = load_config()
+    if config.telegram_bot_token and config.telegram_chat_id:
+        try:
+            from telegram import Bot
+            bot = Bot(token=config.telegram_bot_token)
+            
+            chat_id = config.telegram_chat_id
+            if chat_id.isdigit() and chat_id.startswith("100"):
+                chat_id = "-" + chat_id
+            
+            await bot.send_message(chat_id=chat_id, text=message)
+            logger.info("Telegram notification sent")
+        except Exception as e:
+            logger.error(f"Failed to send Telegram: {str(e)}")
+
+# Routes
+@app.route('/')
+def index():
+    if current_user.is_authenticated:
+        return redirect(url_for('dashboard'))
+    return redirect(url_for('login'))
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for('dashboard'))
+    
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        try:
+            with open('data/users.json', 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if not content:
+                    logger.error("users.json is empty")
+                    flash('System error: user database is empty', 'danger')
+                    return render_template('login.html')
+                users = json.loads(content)
+            
+            if username in users and check_password_hash(users[username]['password'], password):
+                user = User(username, users[username].get('is_admin', False))
+                login_user(user)
+                return redirect(url_for('dashboard'))
+            
+            flash('Invalid credentials', 'danger')
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error in users.json: {str(e)}")
+            flash('System error: corrupted user database', 'danger')
+        except Exception as e:
+            logger.error(f"Login error: {str(e)}")
+            flash('System error during login', 'danger')
+    
+    return render_template('login.html')
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    flash('Logged out successfully', 'success')
+    return redirect(url_for('login'))
+
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    config = load_config()
+    
+    positions = []
+    usdt_balance = 0
+    usdt_equity = 0
+    usdt_unrealized_pnl = 0
+    usdc_balance = 0
+    usdc_equity = 0
+    usdc_unrealized_pnl = 0
+    
+    if binance_handler:
+        try:
+            # Get positions
+            api_positions = binance_handler.get_open_positions()
+            if api_positions:
+                positions = binance_handler.update_dashboard_positions(api_positions)
+            
+            # Get balances
+            usdt_balance, usdt_equity, usdt_unrealized_pnl = binance_handler.get_account_balance('USDT')
+            usdc_balance, usdc_equity, usdc_unrealized_pnl = binance_handler.get_account_balance('USDC')
+            
+        except Exception as e:
+            logger.error(f"Dashboard error: {str(e)}")
+            flash('Error retrieving data', 'danger')
+    
+    return render_template(
+        'dashboard.html',
+        config=config,
+        positions=positions,
+        account_balance=usdt_balance,
+        equity=usdt_equity,
+        unrealized_pnl=usdt_unrealized_pnl,
+        usdc_balance=usdc_balance,
+        usdc_equity=usdc_equity,
+        usdc_unrealized_pnl=usdc_unrealized_pnl
+    )
+
+@app.route('/close_position', methods=['POST'])
+@login_required
+def close_position():
+    symbol = request.form.get('symbol')
+    side = request.form.get('side')
+    quantity = request.form.get('quantity')
+    
+    if not all([symbol, side, quantity]):
+        flash('Missing position information', 'danger')
+        return redirect(url_for('dashboard'))
+    
+    try:
+        if binance_handler:
+            close_side = f"close_{side.lower()}"
+            order_result = binance_handler.place_order(symbol, close_side, quantity=float(quantity))
+            
+            if order_result and not 'error' in order_result:
+                flash(f"Successfully closed {side} position for {symbol}", 'success')
+            else:
+                flash('Failed to close position', 'danger')
+        else:
+            flash('Trading system not initialized', 'danger')
+    except Exception as e:
+        logger.error(f"Error closing position: {str(e)}")
+        flash(f"Error: {str(e)}", 'danger')
+    
+    return redirect(url_for('dashboard'))
+
+@app.route('/settings', methods=['GET', 'POST'])
+@login_required
+def settings():
+    if not current_user.is_admin:
+        flash('Admin access required', 'danger')
+        return redirect(url_for('dashboard'))
+    
+    config = load_config()
+    
+    if request.method == 'POST':
+        updated_config = {
+            "binance_api_key": request.form.get('binance_api_key'),
+            "binance_secret_key": request.form.get('binance_secret_key'),
+            "telegram_bot_token": request.form.get('telegram_bot_token'),
+            "telegram_chat_id": request.form.get('telegram_chat_id'),
+            "leverage": int(request.form.get('leverage', 10)),
+            "order_size_percentage": float(request.form.get('order_size_percentage', 10)),
+            "max_daily_trades": int(request.form.get('max_daily_trades', 30)),
+            "max_open_positions": int(request.form.get('max_open_positions', 5)),
+            "enable_trading": 'enable_trading' in request.form,
+            "enable_webhook_close_signals": 'enable_webhook_close_signals' in request.form,
+            "auto_position_switch": 'auto_position_switch' in request.form,
+            "allow_long_only": 'allow_long_only' in request.form,
+            "allow_short_only": 'allow_short_only' in request.form,
+        }
+        
+        # USDT coins
+        usdt_coins = ['btc', 'eth', 'xrp', 'ada', 'dot', 'xlm', 'imx', 'doge', 'inj', 'ldo', 'arb', 'uni', 'sol', 'bnb', 'fet']
+        for coin in usdt_coins:
+            updated_config[f'{coin}_atr_period'] = int(request.form.get(f'{coin}_atr_period', 14))
+            updated_config[f'{coin}_atr_tp_multiplier'] = float(request.form.get(f'{coin}_atr_tp_multiplier', 2.5))
+            updated_config[f'{coin}_atr_sl_multiplier'] = float(request.form.get(f'{coin}_atr_sl_multiplier', 3.0))
+            updated_config[f'{coin}_order_size_percentage'] = float(request.form.get(f'{coin}_order_size_percentage', 10.0))
+            updated_config[f'{coin}_leverage'] = int(request.form.get(f'{coin}_leverage', 10))
+            updated_config[f'{coin}_enable_trading'] = f'{coin}_enable_trading' in request.form
+            updated_config[f'{coin}_product_type'] = 'USDT-FUTURES'
+        
+        # USDC coins
+        usdc_coins = ['btcusdc', 'ethusdc', 'solusdc', 'aaveusdc', 'bchusdc', 'xrpusdc', 'adausdc', 'avaxusdc', 'linkusdc', 'arbusdc', 'uniusdc', 'crvusdc', 'tiausdc', 'bnbusdc', 'filusdc']
+        for coin in usdc_coins:
+            updated_config[f'{coin}_atr_period'] = int(request.form.get(f'{coin}_atr_period', 14))
+            updated_config[f'{coin}_atr_tp_multiplier'] = float(request.form.get(f'{coin}_atr_tp_multiplier', 2.5))
+            updated_config[f'{coin}_atr_sl_multiplier'] = float(request.form.get(f'{coin}_atr_sl_multiplier', 3.0))
+            updated_config[f'{coin}_order_size_percentage'] = float(request.form.get(f'{coin}_order_size_percentage', 10.0))
+            updated_config[f'{coin}_leverage'] = int(request.form.get(f'{coin}_leverage', 10))
+            updated_config[f'{coin}_enable_trading'] = f'{coin}_enable_trading' in request.form
+            updated_config[f'{coin}_product_type'] = 'USDC-FUTURES'
+        
+        save_config_with_backup(updated_config)
+        
+        # Reinitialize handler
+        global binance_handler
+        binance_handler = BinanceHandler(
+            updated_config['binance_api_key'],
+            updated_config['binance_secret_key'],
+            updated_config
+        )
+        
+        flash('Settings updated successfully', 'success')
+        return redirect(url_for('settings'))
+    
+    return render_template('settings.html', config=config)
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if not request.json:
+        return jsonify({"status": "error", "message": "Invalid JSON"}), 400
+    
+    config = load_config()
+    if not config.enable_trading:
+        return jsonify({"status": "error", "message": "Trading disabled"}), 200
+    
+    try:
+        data = request.json
+        logger.info(f"Webhook received: {data}")
+        
+        # Extract signal
+        signal = data.get('signal') or data.get('message')
+        
+        if not signal:
+            return jsonify({"status": "error", "message": "No signal found"}), 400
+        
+        parts = signal.strip().split('/')
+        if len(parts) != 3:
+            return jsonify({"status": "error", "message": "Invalid signal format"}), 400
+        
+        symbol, direction, action = [part.strip().lower() for part in parts]
+        symbol = symbol.upper()
+        
+        # Ensure proper symbol format
+        if not symbol.endswith('USDT') and not symbol.endswith('USDC'):
+            symbol = f"{symbol}USDT"
+        
+        if direction not in ['long', 'short'] or action not in ['open', 'close']:
+            return jsonify({"status": "error", "message": "Invalid direction/action"}), 400
+        
+        # Master signal filters
+        if action == 'open':
+            if config.allow_long_only and direction == 'short':
+                return jsonify({"status": "filtered", "message": "SHORT disabled"}), 200
+            if config.allow_short_only and direction == 'long':
+                return jsonify({"status": "filtered", "message": "LONG disabled"}), 200
+        
+        # Process signal
+        if binance_handler:
+            def get_symbol_lock(symbol):
+                with webhook_locks_lock:
+                    if symbol not in webhook_locks:
+                        webhook_locks[symbol] = Lock()
+                    return webhook_locks[symbol]
+            
+            symbol_lock = get_symbol_lock(symbol)
+            
+            with symbol_lock:
+                process_signal(symbol, direction, action)
+            
+            return jsonify({"status": "success"}), 200
+        else:
+            return jsonify({"status": "error", "message": "Handler not initialized"}), 500
+            
+    except Exception as e:
+        logger.error(f"Webhook error: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+def process_signal(symbol, direction, action):
+    """Process trading signal"""
+    logger.info(f"Processing: {symbol}/{direction}/{action}")
+    
+    if not binance_handler:
+        return
+    
+    try:
+        config = load_config()
+        
+        # Check daily limits
+        if action == 'open':
+            # Can add daily trade limit check here
+            pass
+        
+        # Check position limits
+        current_positions = binance_handler.get_open_positions()
+        if action == 'open' and len(current_positions) >= config.max_open_positions:
+            logger.info("Max positions reached")
+            return
+        
+        # Execute trade
+        side = f"{action}_{direction}"
+        order_result = binance_handler.place_order(symbol, side)
+        
+        if order_result and 'error' not in order_result:
+            logger.info(f"Order executed: {order_result.get('orderId')}")
+        else:
+            logger.error(f"Order failed: {order_result.get('error')}")
+            
+    except Exception as e:
+        logger.error(f"Signal processing error: {str(e)}")
+
+def start_position_monitor(binance_handler):
+    """Start position monitoring"""
+    monitor_thread = Thread(target=binance_handler.monitor_positions, daemon=True)
+    monitor_thread.start()
+
+# Initialize
+config = load_config()
+if binance_handler:
+    start_position_monitor(binance_handler)
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5001)

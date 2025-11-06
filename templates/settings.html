@@ -1,0 +1,1122 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Binance Bot{% endblock %}
+
+{% block content %}
+<div class="container settings-page">
+    <h1 class="page-title">
+        <i class="fas fa-cog"></i>
+        Bot Settings
+    </h1>
+    
+    <form method="POST" action="{{ url_for('settings') }}">
+        <!-- Tabs -->
+        <div class="settings-tabs">
+            <button type="button" class="tab-btn active" data-tab="general">
+                <i class="fas fa-sliders-h"></i> General
+            </button>
+            <button type="button" class="tab-btn" data-tab="usdt">
+                <i class="fas fa-dollar-sign"></i> USDT Coins (15)
+            </button>
+            <button type="button" class="tab-btn" data-tab="usdc">
+                <i class="fas fa-coins"></i> USDC Coins (15)
+            </button>
+        </div>
+        
+        <!-- General Settings Tab -->
+        <div class="tab-content active" id="tab-general">
+            <div class="settings-section">
+                <h3><i class="fas fa-key"></i> Binance API Configuration</h3>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>Binance API Key</label>
+                        <input type="text" name="binance_api_key" value="{{ config.binance_api_key }}" placeholder="Enter API Key">
+                    </div>
+                    <div class="form-group">
+                        <label>Binance Secret Key</label>
+                        <input type="password" name="binance_secret_key" value="{{ config.binance_secret_key }}" placeholder="Enter Secret Key">
+                    </div>
+                </div>
+            </div>
+            
+            <div class="settings-section">
+                <h3><i class="fab fa-telegram"></i> Telegram Notifications</h3>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>Bot Token</label>
+                        <input type="text" name="telegram_bot_token" value="{{ config.telegram_bot_token }}" placeholder="Bot Token">
+                    </div>
+                    <div class="form-group">
+                        <label>Chat ID</label>
+                        <input type="text" name="telegram_chat_id" value="{{ config.telegram_chat_id }}" placeholder="Chat ID">
+                    </div>
+                </div>
+            </div>
+            
+            <div class="settings-section">
+                <h3><i class="fas fa-chart-line"></i> Trading Parameters</h3>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label>Default Leverage</label>
+                        <input type="number" name="leverage" value="{{ config.leverage }}" min="1" max="125">
+                    </div>
+                    <div class="form-group">
+                        <label>Order Size (%)</label>
+                        <input type="number" name="order_size_percentage" value="{{ config.order_size_percentage }}" step="0.1" min="1" max="100">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Daily Trades</label>
+                        <input type="number" name="max_daily_trades" value="{{ config.max_daily_trades }}" min="1">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Open Positions</label>
+                        <input type="number" name="max_open_positions" value="{{ config.max_open_positions }}" min="1" max="20">
+                    </div>
+                </div>
+                
+                <div class="form-toggles">
+                    <label class="toggle-item">
+                        <input type="checkbox" name="enable_trading" {{ 'checked' if config.enable_trading else '' }}>
+                        <span class="toggle-label">Enable Trading</span>
+                    </label>
+                    <label class="toggle-item">
+                        <input type="checkbox" name="auto_position_switch" {{ 'checked' if config.auto_position_switch else '' }}>
+                        <span class="toggle-label">Auto Position Switch</span>
+                    </label>
+                    <label class="toggle-item">
+                        <input type="checkbox" name="allow_long_only" {{ 'checked' if config.allow_long_only else '' }}>
+                        <span class="toggle-label">Long Only Mode</span>
+                    </label>
+                    <label class="toggle-item">
+                        <input type="checkbox" name="allow_short_only" {{ 'checked' if config.allow_short_only else '' }}>
+                        <span class="toggle-label">Short Only Mode</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+        
+        <!-- USDT Coins Tab -->
+        <div class="tab-content" id="tab-usdt">
+            <div class="coins-grid">
+                <!-- BTC -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fab fa-bitcoin" style="color: #f7931a;"></i> BTC/USDT</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="btc_enable_trading" {{ 'checked' if config.btc_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="btc_leverage" value="{{ config.btc_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="btc_order_size_percentage" value="{{ config.btc_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="btc_atr_period" value="{{ config.btc_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="btc_atr_tp_multiplier" value="{{ config.btc_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="btc_atr_sl_multiplier" value="{{ config.btc_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ETH -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fab fa-ethereum" style="color: #627eea;"></i> ETH/USDT</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="eth_enable_trading" {{ 'checked' if config.eth_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="eth_leverage" value="{{ config.eth_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="eth_order_size_percentage" value="{{ config.eth_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="eth_atr_period" value="{{ config.eth_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="eth_atr_tp_multiplier" value="{{ config.eth_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="eth_atr_sl_multiplier" value="{{ config.eth_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- XRP -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-water" style="color: #00AAE4;"></i> XRP/USDT</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="xrp_enable_trading" {{ 'checked' if config.xrp_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="xrp_leverage" value="{{ config.xrp_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="xrp_order_size_percentage" value="{{ config.xrp_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="xrp_atr_period" value="{{ config.xrp_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="xrp_atr_tp_multiplier" value="{{ config.xrp_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="xrp_atr_sl_multiplier" value="{{ config.xrp_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ADA -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-heart" style="color: #0033AD;"></i> ADA/USDT</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="ada_enable_trading" {{ 'checked' if config.ada_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="ada_leverage" value="{{ config.ada_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="ada_order_size_percentage" value="{{ config.ada_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="ada_atr_period" value="{{ config.ada_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="ada_atr_tp_multiplier" value="{{ config.ada_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="ada_atr_sl_multiplier" value="{{ config.ada_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- DOT -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-circle" style="color: #E6007A;"></i> DOT/USDT</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="dot_enable_trading" {{ 'checked' if config.dot_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="dot_leverage" value="{{ config.dot_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="dot_order_size_percentage" value="{{ config.dot_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="dot_atr_period" value="{{ config.dot_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="dot_atr_tp_multiplier" value="{{ config.dot_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="dot_atr_sl_multiplier" value="{{ config.dot_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- XLM -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-star" style="color: #14B6E7;"></i> XLM/USDT</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="xlm_enable_trading" {{ 'checked' if config.xlm_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="xlm_leverage" value="{{ config.xlm_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="xlm_order_size_percentage" value="{{ config.xlm_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="xlm_atr_period" value="{{ config.xlm_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="xlm_atr_tp_multiplier" value="{{ config.xlm_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="xlm_atr_sl_multiplier" value="{{ config.xlm_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- IMX -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-gem" style="color: #00D4AA;"></i> IMX/USDT</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="imx_enable_trading" {{ 'checked' if config.imx_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="imx_leverage" value="{{ config.imx_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="imx_order_size_percentage" value="{{ config.imx_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="imx_atr_period" value="{{ config.imx_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="imx_atr_tp_multiplier" value="{{ config.imx_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="imx_atr_sl_multiplier" value="{{ config.imx_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- DOGE -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-dog" style="color: #C2A633;"></i> DOGE/USDT</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="doge_enable_trading" {{ 'checked' if config.doge_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="doge_leverage" value="{{ config.doge_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="doge_order_size_percentage" value="{{ config.doge_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="doge_atr_period" value="{{ config.doge_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="doge_atr_tp_multiplier" value="{{ config.doge_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="doge_atr_sl_multiplier" value="{{ config.doge_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- INJ -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-syringe" style="color: #00D4FF;"></i> INJ/USDT</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="inj_enable_trading" {{ 'checked' if config.inj_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="inj_leverage" value="{{ config.inj_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="inj_order_size_percentage" value="{{ config.inj_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="inj_atr_period" value="{{ config.inj_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="inj_atr_tp_multiplier" value="{{ config.inj_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="inj_atr_sl_multiplier" value="{{ config.inj_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- LDO -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-layer-group" style="color: #00A3FF;"></i> LDO/USDT</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="ldo_enable_trading" {{ 'checked' if config.ldo_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="ldo_leverage" value="{{ config.ldo_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="ldo_order_size_percentage" value="{{ config.ldo_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="ldo_atr_period" value="{{ config.ldo_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="ldo_atr_tp_multiplier" value="{{ config.ldo_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="ldo_atr_sl_multiplier" value="{{ config.ldo_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ARB -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-shapes" style="color: #28A0F0;"></i> ARB/USDT</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="arb_enable_trading" {{ 'checked' if config.arb_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="arb_leverage" value="{{ config.arb_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="arb_order_size_percentage" value="{{ config.arb_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="arb_atr_period" value="{{ config.arb_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="arb_atr_tp_multiplier" value="{{ config.arb_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="arb_atr_sl_multiplier" value="{{ config.arb_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- UNI -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-unicorn" style="color: #FF007A;"></i> UNI/USDT</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="uni_enable_trading" {{ 'checked' if config.uni_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="uni_leverage" value="{{ config.uni_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="uni_order_size_percentage" value="{{ config.uni_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="uni_atr_period" value="{{ config.uni_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="uni_atr_tp_multiplier" value="{{ config.uni_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="uni_atr_sl_multiplier" value="{{ config.uni_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- SOL -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-sun" style="color: #00FFA3;"></i> SOL/USDT</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="sol_enable_trading" {{ 'checked' if config.sol_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="sol_leverage" value="{{ config.sol_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="sol_order_size_percentage" value="{{ config.sol_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="sol_atr_period" value="{{ config.sol_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="sol_atr_tp_multiplier" value="{{ config.sol_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="sol_atr_sl_multiplier" value="{{ config.sol_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- BNB -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-coins" style="color: #F3BA2F;"></i> BNB/USDT</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="bnb_enable_trading" {{ 'checked' if config.bnb_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="bnb_leverage" value="{{ config.bnb_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="bnb_order_size_percentage" value="{{ config.bnb_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="bnb_atr_period" value="{{ config.bnb_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="bnb_atr_tp_multiplier" value="{{ config.bnb_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="bnb_atr_sl_multiplier" value="{{ config.bnb_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- FET -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-robot" style="color: #8B5CF6;"></i> FET/USDT</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="fet_enable_trading" {{ 'checked' if config.fet_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="fet_leverage" value="{{ config.fet_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="fet_order_size_percentage" value="{{ config.fet_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="fet_atr_period" value="{{ config.fet_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="fet_atr_tp_multiplier" value="{{ config.fet_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="fet_atr_sl_multiplier" value="{{ config.fet_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- USDC Coins Tab -->
+        <div class="tab-content" id="tab-usdc">
+            <div class="coins-grid">
+                <!-- BTC USDC -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fab fa-bitcoin" style="color: #f7931a;"></i> BTC/USDC</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="btcusdc_enable_trading" {{ 'checked' if config.btcusdc_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="btcusdc_leverage" value="{{ config.btcusdc_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="btcusdc_order_size_percentage" value="{{ config.btcusdc_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="btcusdc_atr_period" value="{{ config.btcusdc_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="btcusdc_atr_tp_multiplier" value="{{ config.btcusdc_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="btcusdc_atr_sl_multiplier" value="{{ config.btcusdc_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ETH USDC -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fab fa-ethereum" style="color: #627eea;"></i> ETH/USDC</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="ethusdc_enable_trading" {{ 'checked' if config.ethusdc_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="ethusdc_leverage" value="{{ config.ethusdc_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="ethusdc_order_size_percentage" value="{{ config.ethusdc_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="ethusdc_atr_period" value="{{ config.ethusdc_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="ethusdc_atr_tp_multiplier" value="{{ config.ethusdc_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="ethusdc_atr_sl_multiplier" value="{{ config.ethusdc_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- SOL USDC -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-sun" style="color: #00FFA3;"></i> SOL/USDC</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="solusdc_enable_trading" {{ 'checked' if config.solusdc_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="solusdc_leverage" value="{{ config.solusdc_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="solusdc_order_size_percentage" value="{{ config.solusdc_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="solusdc_atr_period" value="{{ config.solusdc_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="solusdc_atr_tp_multiplier" value="{{ config.solusdc_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="solusdc_atr_sl_multiplier" value="{{ config.solusdc_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- AAVE USDC -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-ghost" style="color: #B6509E;"></i> AAVE/USDC</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="aaveusdc_enable_trading" {{ 'checked' if config.aaveusdc_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="aaveusdc_leverage" value="{{ config.aaveusdc_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="aaveusdc_order_size_percentage" value="{{ config.aaveusdc_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="aaveusdc_atr_period" value="{{ config.aaveusdc_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="aaveusdc_atr_tp_multiplier" value="{{ config.aaveusdc_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="aaveusdc_atr_sl_multiplier" value="{{ config.aaveusdc_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- BCH USDC -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-money-bill-wave" style="color: #8DC351;"></i> BCH/USDC</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="bchusdc_enable_trading" {{ 'checked' if config.bchusdc_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="bchusdc_leverage" value="{{ config.bchusdc_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="bchusdc_order_size_percentage" value="{{ config.bchusdc_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="bchusdc_atr_period" value="{{ config.bchusdc_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="bchusdc_atr_tp_multiplier" value="{{ config.bchusdc_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="bchusdc_atr_sl_multiplier" value="{{ config.bchusdc_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- XRP USDC -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-water" style="color: #00AAE4;"></i> XRP/USDC</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="xrpusdc_enable_trading" {{ 'checked' if config.xrpusdc_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="xrpusdc_leverage" value="{{ config.xrpusdc_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="xrpusdc_order_size_percentage" value="{{ config.xrpusdc_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="xrpusdc_atr_period" value="{{ config.xrpusdc_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="xrpusdc_atr_tp_multiplier" value="{{ config.xrpusdc_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="xrpusdc_atr_sl_multiplier" value="{{ config.xrpusdc_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ADA USDC -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-heart" style="color: #0033AD;"></i> ADA/USDC</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="adausdc_enable_trading" {{ 'checked' if config.adausdc_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="adausdc_leverage" value="{{ config.adausdc_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="adausdc_order_size_percentage" value="{{ config.adausdc_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="adausdc_atr_period" value="{{ config.adausdc_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="adausdc_atr_tp_multiplier" value="{{ config.adausdc_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="adausdc_atr_sl_multiplier" value="{{ config.adausdc_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- AVAX USDC -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-mountain" style="color: #E84142;"></i> AVAX/USDC</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="avaxusdc_enable_trading" {{ 'checked' if config.avaxusdc_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="avaxusdc_leverage" value="{{ config.avaxusdc_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="avaxusdc_order_size_percentage" value="{{ config.avaxusdc_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="avaxusdc_atr_period" value="{{ config.avaxusdc_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="avaxusdc_atr_tp_multiplier" value="{{ config.avaxusdc_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="avaxusdc_atr_sl_multiplier" value="{{ config.avaxusdc_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- LINK USDC -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-link" style="color: #2A5ADA;"></i> LINK/USDC</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="linkusdc_enable_trading" {{ 'checked' if config.linkusdc_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="linkusdc_leverage" value="{{ config.linkusdc_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="linkusdc_order_size_percentage" value="{{ config.linkusdc_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="linkusdc_atr_period" value="{{ config.linkusdc_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="linkusdc_atr_tp_multiplier" value="{{ config.linkusdc_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="linkusdc_atr_sl_multiplier" value="{{ config.linkusdc_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ARB USDC -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-shapes" style="color: #28A0F0;"></i> ARB/USDC</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="arbusdc_enable_trading" {{ 'checked' if config.arbusdc_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="arbusdc_leverage" value="{{ config.arbusdc_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="arbusdc_order_size_percentage" value="{{ config.arbusdc_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="arbusdc_atr_period" value="{{ config.arbusdc_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="arbusdc_atr_tp_multiplier" value="{{ config.arbusdc_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="arbusdc_atr_sl_multiplier" value="{{ config.arbusdc_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- UNI USDC -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-unicorn" style="color: #FF007A;"></i> UNI/USDC</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="uniusdc_enable_trading" {{ 'checked' if config.uniusdc_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="uniusdc_leverage" value="{{ config.uniusdc_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="uniusdc_order_size_percentage" value="{{ config.uniusdc_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="uniusdc_atr_period" value="{{ config.uniusdc_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="uniusdc_atr_tp_multiplier" value="{{ config.uniusdc_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="uniusdc_atr_sl_multiplier" value="{{ config.uniusdc_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- CRV USDC -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-circle-notch" style="color: #FF0084;"></i> CRV/USDC</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="crvusdc_enable_trading" {{ 'checked' if config.crvusdc_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="crvusdc_leverage" value="{{ config.crvusdc_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="crvusdc_order_size_percentage" value="{{ config.crvusdc_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="crvusdc_atr_period" value="{{ config.crvusdc_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="crvusdc_atr_tp_multiplier" value="{{ config.crvusdc_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="crvusdc_atr_sl_multiplier" value="{{ config.crvusdc_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- TIA USDC -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-moon" style="color: #7B3FE4;"></i> TIA/USDC</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="tiausdc_enable_trading" {{ 'checked' if config.tiausdc_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="tiausdc_leverage" value="{{ config.tiausdc_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="tiausdc_order_size_percentage" value="{{ config.tiausdc_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="tiausdc_atr_period" value="{{ config.tiausdc_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="tiausdc_atr_tp_multiplier" value="{{ config.tiausdc_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="tiausdc_atr_sl_multiplier" value="{{ config.tiausdc_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- BNB USDC -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-coins" style="color: #F3BA2F;"></i> BNB/USDC</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="bnbusdc_enable_trading" {{ 'checked' if config.bnbusdc_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="bnbusdc_leverage" value="{{ config.bnbusdc_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="bnbusdc_order_size_percentage" value="{{ config.bnbusdc_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="bnbusdc_atr_period" value="{{ config.bnbusdc_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="bnbusdc_atr_tp_multiplier" value="{{ config.bnbusdc_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="bnbusdc_atr_sl_multiplier" value="{{ config.bnbusdc_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- FIL USDC -->
+                <div class="coin-card">
+                    <div class="coin-header">
+                        <h4><i class="fas fa-database" style="color: #0090FF;"></i> FIL/USDC</h4>
+                        <label class="switch">
+                            <input type="checkbox" name="filusdc_enable_trading" {{ 'checked' if config.filusdc_enable_trading else '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="coin-settings">
+                        <div class="setting-row">
+                            <label>Leverage:</label>
+                            <input type="number" name="filusdc_leverage" value="{{ config.filusdc_leverage }}" min="1" max="125">
+                        </div>
+                        <div class="setting-row">
+                            <label>Order Size (%):</label>
+                            <input type="number" name="filusdc_order_size_percentage" value="{{ config.filusdc_order_size_percentage }}" step="0.1" min="1">
+                        </div>
+                        <div class="setting-row">
+                            <label>ATR Period:</label>
+                            <input type="number" name="filusdc_atr_period" value="{{ config.filusdc_atr_period }}" min="5" max="50">
+                        </div>
+                        <div class="setting-row">
+                            <label>TP Multiplier:</label>
+                            <input type="number" name="filusdc_atr_tp_multiplier" value="{{ config.filusdc_atr_tp_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                        <div class="setting-row">
+                            <label>SL Multiplier:</label>
+                            <input type="number" name="filusdc_atr_sl_multiplier" value="{{ config.filusdc_atr_sl_multiplier }}" step="0.1" min="0.5">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary btn-large">
+                <i class="fas fa-save"></i> Save All Settings
+            </button>
+        </div>
+    </form>
+</div>
+
+<script>
+// Tab switching
+document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+        const tabId = this.dataset.tab;
+        
+        // Update buttons
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+        
+        // Update content
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        document.getElementById('tab-' + tabId).classList.add('active');
+    });
+});
+</script>
+{% endblock %}
