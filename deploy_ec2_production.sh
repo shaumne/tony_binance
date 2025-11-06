@@ -244,14 +244,14 @@ configure_nginx() {
         print_info "Backed up default Nginx config"
     fi
     
-    # Create Nginx configuration
+    # Create Nginx configuration (HTTP only initially, SSL will be added by certbot)
     cat > /etc/nginx/sites-available/${APP_NAME} <<EOF
 # Upstream Flask application
 upstream ${APP_NAME}_app {
     server 127.0.0.1:${APP_PORT} fail_timeout=0;
 }
 
-# HTTP server - redirect to HTTPS
+# HTTP server
 server {
     listen 80;
     listen [::]:80;
@@ -261,35 +261,6 @@ server {
     location /.well-known/acme-challenge/ {
         root /var/www/html;
     }
-    
-    # Redirect all other traffic to HTTPS
-    location / {
-        return 301 https://\$server_name\$request_uri;
-    }
-}
-
-# HTTPS server
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name ${DOMAIN} www.${DOMAIN};
-    
-    # SSL certificates (will be configured by certbot)
-    # ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
-    # ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
-    
-    # SSL configuration
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers on;
-    ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES256-GCM-SHA384;
-    ssl_session_timeout 10m;
-    ssl_session_cache shared:SSL:10m;
-    
-    # Security headers
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-XSS-Protection "1; mode=block" always;
     
     # Logging
     access_log $APP_DIR/logs/nginx_access.log;
