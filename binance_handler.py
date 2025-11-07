@@ -219,6 +219,47 @@ class BinanceHandler:
         else:
             return 'USDT'
     
+    def _get_coin_icon(self, symbol: str) -> dict:
+        """
+        Get coin icon and color for a symbol
+        
+        Args:
+            symbol (str): Trading symbol (e.g., 'BTCUSDT', 'UNIUSDT')
+            
+        Returns:
+            dict: {'icon': 'icon-class', 'color': '#color-code'}
+        """
+        # Extract base coin from symbol (remove USDT/USDC suffix)
+        base_coin = symbol.replace('USDT', '').replace('USDC', '').upper()
+        
+        coin_icons = {
+            'BTC': {'icon': 'fab fa-bitcoin', 'color': '#f7931a'},
+            'ETH': {'icon': 'fab fa-ethereum', 'color': '#627eea'},
+            'XRP': {'icon': 'fas fa-water', 'color': '#00AAE4'},
+            'ADA': {'icon': 'fas fa-heart', 'color': '#0033AD'},
+            'DOT': {'icon': 'fas fa-circle', 'color': '#E6007A'},
+            'XLM': {'icon': 'fas fa-star', 'color': '#14B6E7'},
+            'IMX': {'icon': 'fas fa-gem', 'color': '#00D4AA'},
+            'DOGE': {'icon': 'fas fa-dog', 'color': '#C2A633'},
+            'INJ': {'icon': 'fas fa-syringe', 'color': '#00D4FF'},
+            'LDO': {'icon': 'fas fa-layer-group', 'color': '#00A3FF'},
+            'ARB': {'icon': 'fas fa-shapes', 'color': '#28A0F0'},
+            'UNI': {'icon': 'fas fa-exchange-alt', 'color': '#FF007A'},
+            'SOL': {'icon': 'fas fa-sun', 'color': '#00FFA3'},
+            'BNB': {'icon': 'fas fa-coins', 'color': '#F3BA2F'},
+            'FET': {'icon': 'fas fa-robot', 'color': '#8B5CF6'},
+            'AAVE': {'icon': 'fas fa-ghost', 'color': '#B6509E'},
+            'BCH': {'icon': 'fas fa-money-bill-wave', 'color': '#8DC351'},
+            'AVAX': {'icon': 'fas fa-mountain', 'color': '#E84142'},
+            'LINK': {'icon': 'fas fa-link', 'color': '#2A5ADA'},
+            'CRV': {'icon': 'fas fa-circle-notch', 'color': '#FF0084'},
+            'TIA': {'icon': 'fas fa-moon', 'color': '#7B3FE4'},
+            'FIL': {'icon': 'fas fa-database', 'color': '#0090FF'},
+        }
+        
+        # Return coin icon or default
+        return coin_icons.get(base_coin, {'icon': 'fas fa-coins', 'color': '#6b7280'})
+    
     def get_account_balance(self, asset='USDT'):
         """Get Futures account balance
         
@@ -226,7 +267,8 @@ class BinanceHandler:
             asset (str): Asset symbol (USDT or USDC)
             
         Returns:
-            tuple: (available_balance, total_balance, unrealized_pnl)
+            tuple: (available_balance, equity, unrealized_pnl)
+            equity = walletBalance + unrealizedProfit
         """
         try:
             logger.info(f"[BALANCE] Fetching {asset} Futures balance...")
@@ -236,18 +278,21 @@ class BinanceHandler:
             
             # Find the specific asset
             available = 0.0
-            total = 0.0
+            wallet_balance = 0.0
             unrealized_pnl = 0.0
             
             for asset_info in account_info['assets']:
                 if asset_info['asset'] == asset:
                     available = float(asset_info['availableBalance'])
-                    total = float(asset_info['walletBalance'])
+                    wallet_balance = float(asset_info['walletBalance'])
                     unrealized_pnl = float(asset_info['unrealizedProfit'])
                     break
             
-            logger.info(f"[BALANCE] {asset} - Available: {available}, Total: {total}, Unrealized PnL: {unrealized_pnl}")
-            return available, total, unrealized_pnl
+            # Equity = walletBalance + unrealizedProfit
+            equity = wallet_balance + unrealized_pnl
+            
+            logger.info(f"[BALANCE] {asset} - Available: {available}, Wallet: {wallet_balance}, Unrealized PnL: {unrealized_pnl}, Equity: {equity}")
+            return available, equity, unrealized_pnl
             
         except Exception as e:
             logger.error(f"Failed to get {asset} account balance: {str(e)}")
@@ -1230,6 +1275,9 @@ class BinanceHandler:
                     logger.warning(f"⚠️ Invalid prices for {pos.get('symbol', 'UNKNOWN')}: entry={entry_price}, mark={mark_price}")
                     pnl_percentage = 0.0
                 
+                # Get coin icon
+                coin_icon = self._get_coin_icon(symbol)
+                
                 formatted_pos = {
                     'symbol': pos['symbol'],
                     'side': side,
@@ -1240,7 +1288,9 @@ class BinanceHandler:
                     'pnl_percentage': f"{pnl_percentage:.2f}%",
                     'leverage': f"{leverage}x",
                     'margin_type': pos.get('marginType', 'cross'),
-                    'liquidation_price': f"${float(pos.get('liquidationPrice', '0')):.4f}"
+                    'liquidation_price': f"${float(pos.get('liquidationPrice', '0')):.4f}",
+                    'coin_icon': coin_icon['icon'],
+                    'coin_color': coin_icon['color']
                 }
                 
                 logger.debug(f"📊 Position formatted: {pos['symbol']} {side} - PnL: ${unrealized_pnl:.2f} ({pnl_percentage:.2f}%)")

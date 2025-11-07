@@ -6,6 +6,17 @@
 <div class="container dashboard">
     <!-- Account Overview -->
     <div class="stats-grid">
+        <div class="stat-card total-card">
+            <div class="stat-icon">
+                <i class="fas fa-wallet"></i>
+            </div>
+            <div class="stat-content">
+                <h3>Total Balance</h3>
+                <p class="stat-value">${{ "{:,.2f}".format(total_balance) }}</p>
+                <small>USDT + USDC Equity</small>
+            </div>
+        </div>
+        
         <div class="stat-card usdt-card">
             <div class="stat-icon">
                 <i class="fas fa-dollar-sign"></i>
@@ -441,7 +452,10 @@
             <div class="position-card {{ position.side|lower }}">
                 <div class="position-header">
                     <div class="position-symbol">
-                        <h3>{{ position.symbol }}</h3>
+                        <div class="coin-logo" style="display: inline-flex; align-items: center; gap: 8px;">
+                            <i class="{{ position.coin_icon }}" style="color: {{ position.coin_color }}; font-size: 1.5rem;"></i>
+                            <h3>{{ position.symbol }}</h3>
+                        </div>
                         <span class="position-side {{ position.side|lower }}">
                             {{ position.side }}
                         </span>

@@ -376,6 +376,9 @@ def dashboard():
             logger.error(f"Dashboard error: {str(e)}")
             flash('Error retrieving data', 'danger')
     
+    # Calculate total balance (USDT equity + USDC equity)
+    total_balance = usdt_equity + usdc_equity
+    
     return render_template(
         'dashboard.html',
         config=config,
@@ -385,7 +388,8 @@ def dashboard():
         unrealized_pnl=usdt_unrealized_pnl,
         usdc_balance=usdc_balance,
         usdc_equity=usdc_equity,
-        usdc_unrealized_pnl=usdc_unrealized_pnl
+        usdc_unrealized_pnl=usdc_unrealized_pnl,
+        total_balance=total_balance
     )
 
 @app.route('/close_position', methods=['POST'])
