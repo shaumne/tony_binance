@@ -510,6 +510,411 @@ class BinanceHandler:
             logger.error(traceback.format_exc())
             return 0.0
     
+    def place_trailing_stop_strategy(self, data: dict):
+        """
+        🔥 FIRE AND FORGET TRAILING STOP STRATEGY
+        
+        Places an entry order followed immediately by a TRAILING_STOP_MARKET order
+        with pre-calculated parameters from TradingView.
+        
+        Args:
+            data (dict): Webhook payload containing:
+                - symbol (str): Trading symbol (e.g., 'BTCUSDT')
+                - side (str): Entry direction ('BUY' or 'SELL')
+                - action (str): Should be 'open'
+                - quantity (str/float): Order size (percentage or absolute)
+                - trailType (str): Must be 'TRAILING_STOP_MARKET'
+                - callbackRate (float): Trailing callback percentage (e.g., 1.5)
+                - activationPrice (float): Price to activate trailing stop
+                - workingType (str): 'MARK_PRICE' or 'CONTRACT_PRICE'
+                - stopLoss (float): Fallback hard stop price
+                
+        Returns:
+            dict: Result with success/error status
+        """
+        try:
+            logger.info("=" * 80)
+            logger.info("🔥 TRAILING STOP STRATEGY - FIRE AND FORGET MODE ACTIVATED")
+            logger.info("=" * 80)
+            
+            # ============================================================
+            # STEP 1: PARSE AND VALIDATE PAYLOAD
+            # ============================================================
+            symbol = data.get('symbol', '').upper().strip()
+            entry_side_str = data.get('side', '').upper()  # 'BUY' or 'SELL'
+            action = data.get('action', 'open').lower()
+            
+            # Convert types strictly
+            try:
+                callback_rate = float(data.get('callbackRate', 0))
+                # activationPrice can be provided or calculated from entry
+                activation_price_input = data.get('activationPrice', None)
+                if activation_price_input is not None:
+                    activation_price_input = float(activation_price_input)
+                stop_loss_price = float(data.get('stopLoss', 0)) if data.get('stopLoss') else None
+            except (TypeError, ValueError) as type_err:
+                logger.error(f"❌ Type conversion error: {type_err}")
+                return {"success": False, "error": f"Invalid numeric values: {type_err}"}
+            
+            working_type = data.get('workingType', 'MARK_PRICE').upper()
+            
+            # Validate required fields (activationPrice is optional - will be calculated)
+            if not all([symbol, entry_side_str, callback_rate]):
+                missing = []
+                if not symbol: missing.append('symbol')
+                if not entry_side_str: missing.append('side')
+                if not callback_rate: missing.append('callbackRate')
+                
+                error_msg = f"Missing required fields: {', '.join(missing)}"
+                logger.error(f"❌ {error_msg}")
+                return {"success": False, "error": error_msg}
+            
+            logger.info(f"📊 STRATEGY PARAMETERS (INPUT):")
+            logger.info(f"   Symbol: {symbol}")
+            logger.info(f"   Entry Side: {entry_side_str}")
+            logger.info(f"   Callback Rate: {callback_rate}%")
+            if activation_price_input:
+                logger.info(f"   Activation Price (provided): ${activation_price_input:.2f}")
+            else:
+                logger.info(f"   Activation Price: Will be calculated from entry price")
+            logger.info(f"   Working Type: {working_type}")
+            if stop_loss_price:
+                logger.info(f"   Fallback Stop Loss: ${stop_loss_price:.2f}")
+            else:
+                logger.info(f"   Fallback Stop Loss: Will be calculated from entry price")
+            
+            # Determine position direction
+            if entry_side_str == 'BUY':
+                direction = 'long'
+                trailing_side = 'SELL'  # Close side for trailing stop
+            elif entry_side_str == 'SELL':
+                direction = 'short'
+                trailing_side = 'BUY'  # Close side for trailing stop
+            else:
+                error_msg = f"Invalid entry side: {entry_side_str}"
+                logger.error(f"❌ {error_msg}")
+                return {"success": False, "error": error_msg}
+            
+            # Check if trading is enabled
+            if not self.config.get('enable_trading', False):
+                logger.warning("❌ Trading is globally disabled")
+                return {"success": False, "error": "Trading is globally disabled"}
+            
+            # Check coin-specific trading
+            if not self.coin_config_manager.is_trading_enabled(symbol):
+                return {"success": False, "error": f"Trading is disabled for {symbol}"}
+            
+            # ============================================================
+            # STEP 2: PLACE PRIMARY ENTRY ORDER (WITHOUT TP/SL)
+            # ============================================================
+            logger.info("=" * 80)
+            logger.info("📤 STEP 2: PLACING PRIMARY ENTRY ORDER (NO TP/SL)")
+            logger.info("=" * 80)
+            
+            # Format symbol
+            formatted_symbol = self._format_symbol(symbol)
+            
+            # Get coin configuration
+            coin_config = self.coin_config_manager.get_coin_config(symbol)
+            
+            # Set leverage
+            leverage_result = self.set_leverage(formatted_symbol, coin_config['leverage'])
+            if not leverage_result:
+                logger.error(f"Failed to set leverage to {coin_config['leverage']}x")
+                return {"success": False, "error": f"Failed to set leverage to {coin_config['leverage']}x"}
+            
+            # Set margin type
+            margin_result = self.set_margin_type(formatted_symbol, 'CROSSED')
+            if not margin_result:
+                logger.warning(f"Failed to set margin type (may already be set)")
+            
+            # Set position mode to Hedge mode
+            self._set_position_mode(formatted_symbol, hedge_mode=True)
+            is_hedge_mode = self._get_position_mode()
+            
+            # Get account balance
+            margin_asset = self._get_margin_asset(formatted_symbol)
+            available_balance, total_balance, unrealized_pnl = self.get_account_balance(margin_asset)
+            
+            if available_balance <= 0:
+                logger.warning("Zero available balance, using dummy value for testing")
+                available_balance = 1000.0
+            
+            # Calculate order quantity
+            current_price = self.get_symbol_price(formatted_symbol)
+            if current_price <= 0:
+                return {"success": False, "error": "Failed to get current price"}
+            
+            # Calculate order size
+            order_amount = available_balance * (coin_config['order_size_percentage'] / 100)
+            leveraged_amount = order_amount * coin_config['leverage']
+            raw_quantity = leveraged_amount / current_price
+            
+            # Round quantity to symbol precision
+            executed_qty = self._round_quantity_to_precision(formatted_symbol, raw_quantity)
+            
+            logger.info(f"📊 Order Calculation:")
+            logger.info(f"   💰 Balance: ${available_balance:.2f}")
+            logger.info(f"   📈 Order %: {coin_config['order_size_percentage']}%")
+            logger.info(f"   🔥 Leverage: {coin_config['leverage']}x")
+            logger.info(f"   💵 Base Amount: ${order_amount:.2f}")
+            logger.info(f"   💪 Leveraged: ${leveraged_amount:.2f}")
+            logger.info(f"   🎯 Quantity: {executed_qty:.6f}")
+            
+            # Determine Binance API side and position side
+            binance_side = 'BUY' if direction == 'long' else 'SELL'
+            position_side = 'LONG' if direction == 'long' else 'SHORT'
+            
+            # Place entry order (WITHOUT TP/SL - trailing stop will handle exit)
+            logger.info(f"📤 Placing entry order:")
+            logger.info(f"   Symbol: {formatted_symbol}")
+            logger.info(f"   Side: {binance_side}")
+            logger.info(f"   Position Side: {position_side}")
+            logger.info(f"   Quantity: {executed_qty}")
+            logger.info(f"   ⚠️ SKIPPING TP/SL (Trailing stop will manage exit)")
+            
+            # Build order parameters
+            order_params = {
+                'symbol': formatted_symbol,
+                'side': binance_side,
+                'type': 'MARKET',
+                'quantity': executed_qty
+            }
+            
+            # Only add positionSide if in Hedge mode
+            if is_hedge_mode:
+                order_params['positionSide'] = position_side
+            
+            try:
+                entry_result = self.client.futures_create_order(**order_params)
+                
+                logger.info(f"✅ ENTRY ORDER PLACED SUCCESSFULLY")
+                logger.info(f"   Order ID: {entry_result.get('orderId', 'N/A')}")
+                logger.info(f"   Status: {entry_result.get('status', 'N/A')}")
+                
+                entry_order_id = entry_result.get('orderId', 'N/A')
+                
+            except Exception as entry_error:
+                logger.error(f"❌ ENTRY ORDER FAILED: {str(entry_error)}")
+                return {"success": False, "error": f"Entry order failed: {str(entry_error)}"}
+            
+            logger.info(f"   Position Size: {executed_qty}")
+            
+            # Wait for position to settle
+            logger.info("⏳ Waiting 1 second for position to settle...")
+            time.sleep(1.0)
+            
+            # ============================================================
+            # STEP 2.5: GET ENTRY PRICE & CALCULATE ACTIVATION/STOP
+            # ============================================================
+            logger.info("=" * 80)
+            logger.info("📊 STEP 2.5: CALCULATING ACTIVATION & STOP PRICES")
+            logger.info("=" * 80)
+            
+            # Get actual entry price
+            entry_price = current_price  # Fallback to order price
+            
+            # Try to get more accurate entry price from position
+            try:
+                positions = self.get_open_positions()
+                for pos in positions:
+                    if pos.get('symbol') == formatted_symbol:
+                        pos_entry = float(pos.get('entryPrice', 0))
+                        if pos_entry > 0:
+                            entry_price = pos_entry
+                            logger.info(f"✅ Got entry price from position: ${entry_price:.6f}")
+                            break
+            except Exception as e:
+                logger.warning(f"Could not get entry from position, using order price: {str(e)}")
+            
+            # Calculate activation price if not provided
+            if activation_price_input:
+                activation_price = activation_price_input
+                logger.info(f"📍 Using provided activation price: ${activation_price:.6f}")
+            else:
+                # Auto-calculate: 2% from entry in profit direction
+                if direction == 'long':
+                    activation_price = entry_price * 1.02  # 2% above entry
+                else:
+                    activation_price = entry_price * 0.98  # 2% below entry
+                logger.info(f"📍 Calculated activation price: ${activation_price:.6f} (entry ± 2%)")
+            
+            # Calculate stop loss if not provided
+            if stop_loss_price is None:
+                # Auto-calculate: 3% from entry in loss direction
+                if direction == 'long':
+                    stop_loss_price = entry_price * 0.97  # 3% below entry
+                else:
+                    stop_loss_price = entry_price * 1.03  # 3% above entry
+                logger.info(f"🛡️ Calculated stop loss: ${stop_loss_price:.6f} (entry ± 3%)")
+            else:
+                logger.info(f"🛡️ Using provided stop loss: ${stop_loss_price:.6f}")
+            
+            # Validate activation price logic
+            if direction == 'long':
+                if activation_price <= entry_price:
+                    logger.warning(f"⚠️ LONG activation price should be > entry, adjusting...")
+                    activation_price = entry_price * 1.02
+                if stop_loss_price >= entry_price:
+                    logger.warning(f"⚠️ LONG stop loss should be < entry, adjusting...")
+                    stop_loss_price = entry_price * 0.97
+            else:  # short
+                if activation_price >= entry_price:
+                    logger.warning(f"⚠️ SHORT activation price should be < entry, adjusting...")
+                    activation_price = entry_price * 0.98
+                if stop_loss_price <= entry_price:
+                    logger.warning(f"⚠️ SHORT stop loss should be > entry, adjusting...")
+                    stop_loss_price = entry_price * 1.03
+            
+            logger.info(f"📊 FINAL PRICES:")
+            logger.info(f"   Entry: ${entry_price:.6f}")
+            logger.info(f"   Activation: ${activation_price:.6f}")
+            logger.info(f"   Stop Loss: ${stop_loss_price:.6f}")
+            
+            # ============================================================
+            # STEP 3: PLACE TRAILING STOP ORDER (WITH FALLBACK)
+            # ============================================================
+            logger.info("=" * 80)
+            logger.info("🎯 STEP 3: PLACING TRAILING STOP MARKET ORDER")
+            logger.info("=" * 80)
+            
+            # Get position mode
+            is_hedge_mode = self._get_position_mode()
+            position_side = 'LONG' if direction == 'long' else 'SHORT'
+            
+            # Prepare trailing stop parameters
+            # Note: TRAILING_STOP_MARKET does NOT support closePosition parameter
+            # We must use quantity + correct side to close the position
+            trailing_params = {
+                'symbol': symbol,
+                'side': trailing_side,
+                'type': 'TRAILING_STOP_MARKET',
+                'quantity': executed_qty,  # Must specify quantity
+                'callbackRate': callback_rate,
+                'activationPrice': activation_price,
+                'workingType': working_type
+            }
+            
+            # Add positionSide only if in hedge mode
+            if is_hedge_mode:
+                trailing_params['positionSide'] = position_side
+            
+            logger.info(f"🔒 TRAILING STOP PARAMETERS:")
+            logger.info(f"   Type: TRAILING_STOP_MARKET")
+            logger.info(f"   Side: {trailing_side}")
+            logger.info(f"   Quantity: {executed_qty}")
+            logger.info(f"   Callback Rate: {callback_rate}%")
+            logger.info(f"   Activation Price: ${activation_price:.2f}")
+            logger.info(f"   Working Type: {working_type}")
+            if is_hedge_mode:
+                logger.info(f"   Position Side: {position_side}")
+            
+            # TRY to place trailing stop with retry
+            trailing_order = None
+            max_retries = 3
+            
+            for attempt in range(max_retries):
+                try:
+                    logger.info(f"🔄 Trailing Stop Attempt {attempt + 1}/{max_retries}")
+                    
+                    trailing_order = self.client.futures_create_order(**trailing_params)
+                    
+                    logger.info(f"✅✅✅ TRAILING STOP ORDER PLACED SUCCESSFULLY! ✅✅✅")
+                    logger.info(f"   Order ID: {trailing_order.get('orderId', 'N/A')}")
+                    logger.info(f"   Status: {trailing_order.get('status', 'N/A')}")
+                    logger.info(f"   Type: {trailing_order.get('type', 'N/A')}")
+                    
+                    # SUCCESS - Return immediately
+                    return {
+                        "success": True,
+                        "message": "Trailing stop strategy executed successfully",
+                        "order_id": entry_order_id,
+                        "trailing_stop_id": trailing_order.get('orderId', 'N/A'),
+                        "strategy": "TRAILING_STOP_MARKET"
+                    }
+                    
+                except Exception as trailing_error:
+                    error_msg = str(trailing_error)
+                    logger.warning(f"⚠️ Trailing stop attempt {attempt + 1} failed: {error_msg}")
+                    
+                    if attempt < max_retries - 1:
+                        wait_time = (attempt + 1) * 0.5
+                        logger.info(f"   Waiting {wait_time}s before retry...")
+                        time.sleep(wait_time)
+                    else:
+                        # ALL RETRIES FAILED - ACTIVATE FALLBACK
+                        logger.error(f"❌❌❌ TRAILING STOP FAILED AFTER {max_retries} ATTEMPTS ❌❌❌")
+                        logger.error(f"   Last Error: {error_msg}")
+                        logger.error(f"   ACTIVATING FALLBACK: Placing STOP_MARKET order")
+                        break
+            
+            # ============================================================
+            # STEP 4: FALLBACK - PLACE HARD STOP_MARKET ORDER
+            # ============================================================
+            if not trailing_order:
+                logger.info("=" * 80)
+                logger.info("🛡️ FALLBACK ACTIVATED: PLACING STOP_MARKET ORDER")
+                logger.info("=" * 80)
+                
+                if stop_loss_price <= 0:
+                    logger.error(f"❌ CRITICAL: No fallback stop loss price provided!")
+                    return {
+                        "success": False,
+                        "error": "Trailing stop failed and no fallback stop loss provided"
+                    }
+                
+                # Prepare fallback stop params
+                # Note: Use quantity instead of closePosition for compatibility
+                fallback_params = {
+                    'symbol': symbol,
+                    'side': trailing_side,
+                    'type': 'STOP_MARKET',
+                    'quantity': executed_qty,  # Must specify quantity
+                    'stopPrice': stop_loss_price
+                }
+                
+                if is_hedge_mode:
+                    fallback_params['positionSide'] = position_side
+                
+                logger.info(f"🔒 FALLBACK STOP PARAMETERS:")
+                logger.info(f"   Type: STOP_MARKET")
+                logger.info(f"   Side: {trailing_side}")
+                logger.info(f"   Quantity: {executed_qty}")
+                logger.info(f"   Stop Price: ${stop_loss_price:.2f}")
+                
+                try:
+                    fallback_order = self.client.futures_create_order(**fallback_params)
+                    
+                    logger.info(f"✅ FALLBACK STOP_MARKET ORDER PLACED")
+                    logger.info(f"   Order ID: {fallback_order.get('orderId', 'N/A')}")
+                    logger.info(f"   Stop Price: ${stop_loss_price:.2f}")
+                    
+                    return {
+                        "success": True,
+                        "message": "Trailing stop failed, placed hard stop as fallback",
+                        "order_id": entry_order_id,
+                        "fallback_stop_id": fallback_order.get('orderId', 'N/A'),
+                        "strategy": "FALLBACK_STOP_MARKET",
+                        "warning": "Trailing stop rejected by exchange"
+                    }
+                    
+                except Exception as fallback_error:
+                    logger.error(f"❌❌❌ FALLBACK ALSO FAILED ❌❌❌")
+                    logger.error(f"   Error: {str(fallback_error)}")
+                    
+                    return {
+                        "success": False,
+                        "error": f"Both trailing stop and fallback failed: {str(fallback_error)}",
+                        "order_id": entry_order_id,
+                        "warning": "Position opened but no stop protection placed!"
+                    }
+            
+        except Exception as e:
+            logger.error(f"❌ CRITICAL ERROR IN TRAILING STOP STRATEGY: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return {"success": False, "error": str(e)}
+    
     def place_order(self, symbol, side, order_type="MARKET", quantity=None, product_type='USDT-FUTURES'):
         """
         Place order on Binance Futures with TP/SL

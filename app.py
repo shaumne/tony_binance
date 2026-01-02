@@ -496,6 +496,54 @@ def webhook():
         data = request.json
         logger.info(f"Webhook received: {data}")
         
+        # 🔥 NEW: Check for Trailing Stop Strategy
+        if data.get('trailType') == 'TRAILING_STOP_MARKET':
+            logger.info("🚀 TRAILING STOP STRATEGY DETECTED")
+            
+            # Validate required fields (activationPrice is optional - auto-calculated if not provided)
+            required_fields = ['symbol', 'side', 'action', 'callbackRate', 'workingType']
+            missing_fields = [field for field in required_fields if field not in data]
+            
+            if missing_fields:
+                return jsonify({
+                    "status": "error", 
+                    "message": f"Missing required fields: {', '.join(missing_fields)}"
+                }), 400
+            
+            # Process Trailing Stop Strategy
+            if binance_handler:
+                def get_symbol_lock(symbol):
+                    with webhook_locks_lock:
+                        if symbol not in webhook_locks:
+                            webhook_locks[symbol] = Lock()
+                        return webhook_locks[symbol]
+                
+                symbol_lock = get_symbol_lock(data['symbol'])
+                
+                with symbol_lock:
+                    result = binance_handler.place_trailing_stop_strategy(data)
+                
+                if result and result.get('success'):
+                    return jsonify({
+                        "status": "success",
+                        "message": result.get('message', 'Trailing stop order placed'),
+                        "order_id": result.get('order_id'),
+                        "trailing_stop_id": result.get('trailing_stop_id')
+                    }), 200
+                elif result and result.get('error'):
+                    return jsonify({
+                        "status": "error",
+                        "message": result.get('error')
+                    }), 200
+                else:
+                    return jsonify({
+                        "status": "error",
+                        "message": "Trailing stop order failed - check logs"
+                    }), 200
+            else:
+                return jsonify({"status": "error", "message": "Handler not initialized"}), 500
+        
+        # 📌 STANDARD STRATEGY (Old Logic)
         # Extract signal
         signal = data.get('signal') or data.get('message')
         
