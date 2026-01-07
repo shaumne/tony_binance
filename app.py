@@ -500,6 +500,10 @@ def webhook():
         if data.get('trailType') == 'TRAILING_STOP_MARKET':
             logger.info("🚀 TRAILING STOP STRATEGY DETECTED")
             
+            # Clean .P extension from symbol if present (e.g., FETUSDT.P -> FETUSDT)
+            if 'symbol' in data:
+                data['symbol'] = data['symbol'].replace('.P', '').replace('.p', '')
+            
             # Validate required fields (activationPrice is optional - auto-calculated if not provided)
             required_fields = ['symbol', 'side', 'action', 'callbackRate', 'workingType']
             missing_fields = [field for field in required_fields if field not in data]
@@ -556,6 +560,8 @@ def webhook():
         
         symbol, direction, action = [part.strip().lower() for part in parts]
         symbol = symbol.upper()
+        # Clean .P extension from symbol if present (e.g., FETUSDT.P -> FETUSDT)
+        symbol = symbol.replace('.P', '').replace('.p', '')
         
         # Ensure proper symbol format
         if not symbol.endswith('USDT') and not symbol.endswith('USDC'):

@@ -70,11 +70,13 @@ class BinanceHandler:
         Format symbol for Binance API
         
         Args:
-            symbol (str): Trading symbol (e.g., 'BTCUSDT', 'ETHUSDC')
+            symbol (str): Trading symbol (e.g., 'BTCUSDT', 'ETHUSDC', 'FETUSDT.P')
             
         Returns:
-            str: Formatted symbol (Binance uses plain format)
+            str: Formatted symbol (Binance uses plain format, .P extension removed)
         """
+        # Remove .P extension if present (e.g., FETUSDT.P -> FETUSDT)
+        symbol = symbol.replace('.P', '').replace('.p', '')
         # Binance uses simple format like BTCUSDT, ETHUSDC
         return symbol.upper().strip()
     
@@ -541,6 +543,8 @@ class BinanceHandler:
             # STEP 1: PARSE AND VALIDATE PAYLOAD
             # ============================================================
             symbol = data.get('symbol', '').upper().strip()
+            # Clean .P extension from symbol (e.g., FETUSDT.P -> FETUSDT)
+            symbol = symbol.replace('.P', '').replace('.p', '')
             entry_side_str = data.get('side', '').upper()  # 'BUY' or 'SELL'
             action = data.get('action', 'open').lower()
             
@@ -645,10 +649,40 @@ class BinanceHandler:
             if current_price <= 0:
                 return {"success": False, "error": "Failed to get current price"}
             
-            # Calculate order size
-            order_amount = available_balance * (coin_config['order_size_percentage'] / 100)
-            leveraged_amount = order_amount * coin_config['leverage']
-            raw_quantity = leveraged_amount / current_price
+            # STEP 2.1: Get quantity from payload if provided, otherwise use config
+            quantity_input = data.get('quantity')
+            if quantity_input is not None:
+                # Check if quantity is percentage string (e.g., "50%")
+                if isinstance(quantity_input, str) and quantity_input.endswith('%'):
+                    try:
+                        percentage = float(quantity_input.rstrip('%'))
+                        logger.info(f"📊 Using quantity from payload: {percentage}% of balance")
+                        order_amount = available_balance * (percentage / 100)
+                        leveraged_amount = order_amount * coin_config['leverage']
+                        raw_quantity = leveraged_amount / current_price
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"⚠️ Invalid quantity format '{quantity_input}', using config instead")
+                        # Fallback to config
+                        order_amount = available_balance * (coin_config['order_size_percentage'] / 100)
+                        leveraged_amount = order_amount * coin_config['leverage']
+                        raw_quantity = leveraged_amount / current_price
+                else:
+                    # Direct quantity value provided
+                    try:
+                        raw_quantity = float(quantity_input)
+                        logger.info(f"📊 Using quantity from payload: {raw_quantity} (absolute value)")
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"⚠️ Invalid quantity value '{quantity_input}', using config instead")
+                        # Fallback to config
+                        order_amount = available_balance * (coin_config['order_size_percentage'] / 100)
+                        leveraged_amount = order_amount * coin_config['leverage']
+                        raw_quantity = leveraged_amount / current_price
+            else:
+                # No quantity in payload, use config
+                logger.info(f"📊 No quantity in payload, using config: {coin_config['order_size_percentage']}%")
+                order_amount = available_balance * (coin_config['order_size_percentage'] / 100)
+                leveraged_amount = order_amount * coin_config['leverage']
+                raw_quantity = leveraged_amount / current_price
             
             # Round quantity to symbol precision
             executed_qty = self._round_quantity_to_precision(formatted_symbol, raw_quantity)
