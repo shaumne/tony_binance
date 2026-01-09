@@ -609,14 +609,50 @@ class BinanceHandler:
                 return {"success": False, "error": f"Trading is disabled for {symbol}"}
             
             # ============================================================
+            # STEP 1.5: POSITION VALIDATION (AUTO POSITION SWITCH)
+            # ============================================================
+            logger.info("=" * 80)
+            logger.info("🔍 STEP 1.5: POSITION VALIDATION (AUTO POSITION SWITCH)")
+            logger.info("=" * 80)
+            
+            # Format symbol for validation
+            formatted_symbol = self._format_symbol(symbol)
+            
+            # Get current positions for validation
+            current_positions = self.get_open_positions()
+            
+            # Validate position request
+            auto_switch_enabled = self.config.get('auto_position_switch', True)
+            validation_result = self.position_validator.validate_position_request(
+                formatted_symbol, direction, action, current_positions, auto_switch_enabled
+            )
+            
+            if not validation_result['allowed']:
+                logger.warning(f"❌ Position request REJECTED: {validation_result['reason']}")
+                return {"success": False, "error": validation_result['reason']}
+            
+            # Handle required actions (e.g., close opposite position)
+            if validation_result.get('action_required'):
+                action_type = validation_result['action_required']['type']
+                
+                if action_type == 'close_opposite':
+                    logger.info("🔄 Auto position switch: Closing opposite position...")
+                    positions_to_close = validation_result['action_required']['positions_to_close']
+                    
+                    for pos in positions_to_close:
+                        close_side = f"close_{pos['side']}"
+                        close_result = self.place_order(formatted_symbol, close_side, quantity=pos['size'])
+                        
+                        if not close_result or 'error' in close_result:
+                            logger.error(f"❌ Failed to close opposite position")
+                            return {"success": False, "error": "Failed to close opposite position"}
+            
+            # ============================================================
             # STEP 2: PLACE PRIMARY ENTRY ORDER (WITHOUT TP/SL)
             # ============================================================
             logger.info("=" * 80)
             logger.info("📤 STEP 2: PLACING PRIMARY ENTRY ORDER (NO TP/SL)")
             logger.info("=" * 80)
-            
-            # Format symbol
-            formatted_symbol = self._format_symbol(symbol)
             
             # Get coin configuration
             coin_config = self.coin_config_manager.get_coin_config(symbol)
@@ -820,7 +856,7 @@ class BinanceHandler:
             # Note: TRAILING_STOP_MARKET does NOT support closePosition parameter
             # We must use quantity + correct side to close the position
             trailing_params = {
-                'symbol': symbol,
+                'symbol': formatted_symbol,  # FIX: Use formatted_symbol instead of symbol
                 'side': trailing_side,
                 'type': 'TRAILING_STOP_MARKET',
                 'quantity': executed_qty,  # Must specify quantity
@@ -900,7 +936,7 @@ class BinanceHandler:
                 # Prepare fallback stop params
                 # Note: Use quantity instead of closePosition for compatibility
                 fallback_params = {
-                    'symbol': symbol,
+                    'symbol': formatted_symbol,  # FIX: Use formatted_symbol instead of symbol
                     'side': trailing_side,
                     'type': 'STOP_MARKET',
                     'quantity': executed_qty,  # Must specify quantity
@@ -935,6 +971,78 @@ class BinanceHandler:
                 except Exception as fallback_error:
                     logger.error(f"❌❌❌ FALLBACK ALSO FAILED ❌❌❌")
                     logger.error(f"   Error: {str(fallback_error)}")
+                    
+                    # CRITICAL FIX: If both trailing stop and fallback failed, place TP/SL as last resort
+                    logger.warning("🛡️ Last resort: Placing TP/SL orders as protection...")
+                    try:
+                        # Get entry price from position
+                        positions = self.get_open_positions()
+                        actual_entry_price = entry_price
+                        for pos in positions:
+                            if pos.get('symbol') == formatted_symbol:
+                                pos_entry = float(pos.get('entryPrice', 0))
+                                if pos_entry > 0:
+                                    actual_entry_price = pos_entry
+                                    break
+                        
+                        # Calculate ATR and TP/SL
+                        atr_period = self.tp_sl_manager.get_atr_period(formatted_symbol)
+                        atr_value = self.get_atr(formatted_symbol, atr_period)
+                        
+                        if atr_value > 0:
+                            tp_price, sl_price = self.tp_sl_manager.calculate_tp_sl_prices(
+                                formatted_symbol, actual_entry_price, atr_value, direction
+                            )
+                            
+                            # Validate TP/SL logic
+                            if self.tp_sl_manager.validate_tp_sl_logic(
+                                formatted_symbol, direction, actual_entry_price, tp_price, sl_price
+                            ):
+                                # Place TP/SL orders
+                                tp_side = 'SELL' if direction == 'long' else 'BUY'
+                                tp_price_rounded = self.tp_sl_manager._round_to_price_step(formatted_symbol, tp_price)
+                                sl_price_rounded = self.tp_sl_manager._round_to_price_step(formatted_symbol, sl_price)
+                                
+                                tp_params = {
+                                    'symbol': formatted_symbol,
+                                    'side': tp_side,
+                                    'type': 'TAKE_PROFIT_MARKET',
+                                    'stopPrice': tp_price_rounded,
+                                    'closePosition': True
+                                }
+                                
+                                sl_params = {
+                                    'symbol': formatted_symbol,
+                                    'side': tp_side,
+                                    'type': 'STOP_MARKET',
+                                    'stopPrice': sl_price_rounded,
+                                    'closePosition': True
+                                }
+                                
+                                if is_hedge_mode:
+                                    tp_params['positionSide'] = position_side
+                                    sl_params['positionSide'] = position_side
+                                
+                                try:
+                                    tp_order = self.client.futures_create_order(**tp_params)
+                                    sl_order = self.client.futures_create_order(**sl_params)
+                                    logger.info(f"✅✅✅ TP/SL PLACED AS LAST RESORT ✅✅✅")
+                                    logger.info(f"   TP Order ID: {tp_order.get('orderId', 'N/A')}")
+                                    logger.info(f"   SL Order ID: {sl_order.get('orderId', 'N/A')}")
+                                    
+                                    return {
+                                        "success": True,
+                                        "message": "Trailing stop and fallback failed, but TP/SL placed as protection",
+                                        "order_id": entry_order_id,
+                                        "tp_order_id": tp_order.get('orderId', 'N/A'),
+                                        "sl_order_id": sl_order.get('orderId', 'N/A'),
+                                        "strategy": "FALLBACK_TP_SL",
+                                        "warning": "Trailing stop failed, using TP/SL protection"
+                                    }
+                                except Exception as tp_sl_error:
+                                    logger.error(f"❌ TP/SL placement also failed: {str(tp_sl_error)}")
+                    except Exception as tp_sl_fallback_error:
+                        logger.error(f"❌ TP/SL fallback failed: {str(tp_sl_fallback_error)}")
                     
                     return {
                         "success": False,
@@ -1173,7 +1281,7 @@ class BinanceHandler:
                         
                         # Get ATR value using 1h data
                         logger.info(f"⏳ Step 3/6: Calculating ATR...")
-                        atr_period = self.tp_sl_manager.get_atr_period(symbol)
+                        atr_period = self.tp_sl_manager.get_atr_period(formatted_symbol)  # FIX: Use formatted_symbol
                         logger.info(f"   ATR Period: {atr_period}")
                         
                         atr_value = self.get_atr(formatted_symbol, atr_period)
@@ -1189,7 +1297,7 @@ class BinanceHandler:
                         # Calculate TP/SL prices
                         logger.info(f"⏳ Step 4/6: Calculating TP/SL prices...")
                         tp_price, sl_price = self.tp_sl_manager.calculate_tp_sl_prices(
-                            symbol, current_price, atr_value, direction
+                            formatted_symbol, current_price, atr_value, direction  # FIX: Use formatted_symbol
                         )
                         
                         logger.info(f"📊 TP/SL Price Calculation Results:")
@@ -1201,7 +1309,7 @@ class BinanceHandler:
                         # Validate TP/SL logic
                         logger.info(f"⏳ Step 5/6: Validating TP/SL logic...")
                         is_valid = self.tp_sl_manager.validate_tp_sl_logic(
-                            symbol, direction, current_price, tp_price, sl_price
+                            formatted_symbol, direction, current_price, tp_price, sl_price  # FIX: Use formatted_symbol
                         )
                         
                         if not is_valid:
@@ -1219,8 +1327,8 @@ class BinanceHandler:
                         tp_side = 'SELL' if direction == 'long' else 'BUY'
                         
                         # Round stop prices to proper precision
-                        tp_price_rounded = self.tp_sl_manager._round_to_price_step(symbol, tp_price)
-                        sl_price_rounded = self.tp_sl_manager._round_to_price_step(symbol, sl_price)
+                        tp_price_rounded = self.tp_sl_manager._round_to_price_step(formatted_symbol, tp_price)  # FIX: Use formatted_symbol
+                        sl_price_rounded = self.tp_sl_manager._round_to_price_step(formatted_symbol, sl_price)  # FIX: Use formatted_symbol
                         
                         logger.info(f"📊 Rounded Prices:")
                         logger.info(f"   TP: ${tp_price:.6f} -> ${tp_price_rounded:.6f}")
