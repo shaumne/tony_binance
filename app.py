@@ -497,12 +497,22 @@ def webhook():
         logger.info(f"Webhook received: {data}")
         
         # 🔥 NEW: Check for Trailing Stop Strategy
-        if data.get('trailType') == 'TRAILING_STOP_MARKET':
+        # Support both 'trailType' and 'type' keys for compatibility
+        trail_type = data.get('trailType') or data.get('type')
+        if trail_type == 'TRAILING_STOP_MARKET':
             logger.info("🚀 TRAILING STOP STRATEGY DETECTED")
             
             # Clean .P extension from symbol if present (e.g., FETUSDT.P -> FETUSDT)
             if 'symbol' in data:
                 data['symbol'] = data['symbol'].replace('.P', '').replace('.p', '')
+            
+            # Normalize action to lowercase
+            if 'action' in data:
+                data['action'] = data['action'].lower()
+            
+            # Add trailType if missing (for compatibility)
+            if 'trailType' not in data and 'type' in data:
+                data['trailType'] = data['type']
             
             # Validate required fields (activationPrice is optional - auto-calculated if not provided)
             required_fields = ['symbol', 'side', 'action', 'callbackRate', 'workingType']

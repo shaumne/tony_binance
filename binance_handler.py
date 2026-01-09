@@ -7,6 +7,10 @@ import asyncio
 import pandas as pd
 import numpy as np
 import threading
+import hmac
+import hashlib
+import requests
+from urllib.parse import urlencode
 
 # Import management systems
 from tp_sl_manager import TPSLManager
@@ -50,6 +54,9 @@ class BinanceHandler:
         
         # Initialize Binance client
         self.client = Client(api_key, secret_key)
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self.base_url = 'https://fapi.binance.com'  # Futures API base URL
         
         # Store last known position states
         self.last_position_states = {}
@@ -880,14 +887,21 @@ class BinanceHandler:
                 logger.info(f"   Position Side: {position_side}")
             
             # TRY to place trailing stop with retry
+            # CRITICAL FIX: Use Algo Order API for trailing stop (error -4120)
             trailing_order = None
             max_retries = 3
             
             for attempt in range(max_retries):
                 try:
                     logger.info(f"🔄 Trailing Stop Attempt {attempt + 1}/{max_retries}")
+                    logger.info(f"   Using Binance Algo Order API (futures_create_algo_order)")
                     
-                    trailing_order = self.client.futures_create_order(**trailing_params)
+                    # CRITICAL: Trailing stop MUST use Algo Order API, not regular order API
+                    # Python-binance might not have this method, so we'll use direct API call
+                    trailing_order = self._place_trailing_stop_algo_order(
+                        formatted_symbol, trailing_side, executed_qty, callback_rate,
+                        activation_price, working_type, position_side, is_hedge_mode
+                    )
                     
                     logger.info(f"✅✅✅ TRAILING STOP ORDER PLACED SUCCESSFULLY! ✅✅✅")
                     logger.info(f"   Order ID: {trailing_order.get('orderId', 'N/A')}")
@@ -1518,6 +1532,83 @@ class BinanceHandler:
         
         # One-way mode: determine from positionAmt sign
         return 'LONG' if position_amt > 0 else 'SHORT'
+    
+    def _place_trailing_stop_algo_order(self, symbol: str, side: str, quantity: float,
+                                       callback_rate: float, activation_price: float,
+                                       working_type: str, position_side: str, is_hedge_mode: bool):
+        """
+        Place trailing stop order using Binance Algo Order API
+        
+        CRITICAL: Trailing stop orders MUST use Algo Order API, not regular order API
+        Error -4120: "Order type not supported for this endpoint. Please use the Algo Order API endpoints instead."
+        
+        Args:
+            symbol: Trading symbol
+            side: Order side ('SELL' for long positions, 'BUY' for short)
+            quantity: Order quantity
+            callback_rate: Trailing callback rate (e.g., 0.1 for 0.1%)
+            activation_price: Activation price
+            working_type: 'MARK_PRICE' or 'CONTRACT_PRICE'
+            position_side: 'LONG' or 'SHORT'
+            is_hedge_mode: Whether in hedge mode
+            
+        Returns:
+            dict: Order response
+        """
+        try:
+            import time as time_module
+            
+            # Binance Futures Algo Order API endpoint
+            endpoint = '/fapi/v1/algo/order'
+            url = f"{self.base_url}{endpoint}"
+            
+            # Build parameters
+            params = {
+                'symbol': symbol,
+                'side': side,
+                'type': 'TRAILING_STOP_MARKET',
+                'quantity': quantity,
+                'callbackRate': callback_rate,
+                'activationPrice': activation_price,
+                'workingType': working_type,
+                'timestamp': int(time_module.time() * 1000)
+            }
+            
+            # Add positionSide only if in hedge mode
+            if is_hedge_mode:
+                params['positionSide'] = position_side
+            
+            # Create signature
+            query_string = urlencode(sorted(params.items()))
+            signature = hmac.new(
+                self.secret_key.encode('utf-8'),
+                query_string.encode('utf-8'),
+                hashlib.sha256
+            ).hexdigest()
+            params['signature'] = signature
+            
+            # Make request
+            headers = {
+                'X-MBX-APIKEY': self.api_key
+            }
+            
+            logger.info(f"📡 Calling Binance Algo Order API: {url}")
+            logger.info(f"   Parameters: {dict((k, v) for k, v in params.items() if k != 'signature')}")
+            
+            response = requests.post(url, params=params, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"✅ Algo Order API Response: {result}")
+                return result
+            else:
+                error_msg = f"Algo Order API error: {response.status_code} - {response.text}"
+                logger.error(f"❌ {error_msg}")
+                raise Exception(error_msg)
+                
+        except Exception as e:
+            logger.error(f"❌ Error placing algo order: {str(e)}")
+            raise
     
     def _place_tp_sl_with_retry(self, symbol: str, tp_params: dict, sl_params: dict, 
                                 position_side: str, max_retries: int = 3) -> tuple:
