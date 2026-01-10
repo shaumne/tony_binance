@@ -555,19 +555,68 @@ class BinanceHandler:
             entry_side_str = data.get('side', '').upper()  # 'BUY' or 'SELL'
             action = data.get('action', 'open').lower()
             
-            # Convert types strictly
+            # ============================================================
+            # TYPE SAFETY: Convert and validate all numeric values
+            # ============================================================
             try:
-                callback_rate = float(data.get('callbackRate', 0))
-                # activationPrice can be provided or calculated from entry
+                # callbackRate: Convert to float, validate Binance limits (0.1 - 5.0%)
+                callback_rate_raw = data.get('callbackRate', None)
+                if callback_rate_raw is None:
+                    raise ValueError("callbackRate is required")
+                
+                # Handle string values (e.g., "1.5" or "1.5%")
+                if isinstance(callback_rate_raw, str):
+                    callback_rate_raw = callback_rate_raw.strip().rstrip('%')
+                
+                callback_rate = float(callback_rate_raw)
+                
+                # Validate Binance callback rate limits: 0.1% to 5.0%
+                if callback_rate < 0.1 or callback_rate > 5.0:
+                    error_msg = f"callbackRate {callback_rate}% is out of Binance limits (0.1% - 5.0%)"
+                    logger.error(f"❌ {error_msg}")
+                    return {"success": False, "error": error_msg}
+                
+                logger.info(f"✅ callbackRate validated: {callback_rate}% (within 0.1%-5.0% range)")
+                
+            except (TypeError, ValueError) as type_err:
+                error_msg = f"Invalid callbackRate value: {data.get('callbackRate')}. Must be a number between 0.1 and 5.0"
+                logger.error(f"❌ Type conversion error: {type_err}")
+                logger.error(f"   {error_msg}")
+                return {"success": False, "error": error_msg}
+            
+            # activationPrice: Optional, can be provided or calculated from entry
+            try:
                 activation_price_input = data.get('activationPrice', None)
                 if activation_price_input is not None:
+                    if isinstance(activation_price_input, str):
+                        activation_price_input = activation_price_input.strip()
                     activation_price_input = float(activation_price_input)
-                stop_loss_price = float(data.get('stopLoss', 0)) if data.get('stopLoss') else None
+                    if activation_price_input <= 0:
+                        logger.warning(f"⚠️ Invalid activationPrice: {activation_price_input}, will be calculated from entry")
+                        activation_price_input = None
             except (TypeError, ValueError) as type_err:
-                logger.error(f"❌ Type conversion error: {type_err}")
-                return {"success": False, "error": f"Invalid numeric values: {type_err}"}
+                logger.warning(f"⚠️ Invalid activationPrice format: {data.get('activationPrice')}, will be calculated from entry")
+                activation_price_input = None
+            
+            # stopLoss: Optional fallback price
+            try:
+                stop_loss_raw = data.get('stopLoss', None)
+                stop_loss_price = None
+                if stop_loss_raw is not None:
+                    if isinstance(stop_loss_raw, str):
+                        stop_loss_raw = stop_loss_raw.strip()
+                    stop_loss_price = float(stop_loss_raw)
+                    if stop_loss_price <= 0:
+                        logger.warning(f"⚠️ Invalid stopLoss: {stop_loss_price}, will be calculated from entry")
+                        stop_loss_price = None
+            except (TypeError, ValueError) as type_err:
+                logger.warning(f"⚠️ Invalid stopLoss format: {data.get('stopLoss')}, will be calculated from entry")
+                stop_loss_price = None
             
             working_type = data.get('workingType', 'MARK_PRICE').upper()
+            if working_type not in ['MARK_PRICE', 'CONTRACT_PRICE']:
+                logger.warning(f"⚠️ Invalid workingType: {working_type}, defaulting to MARK_PRICE")
+                working_type = 'MARK_PRICE'
             
             # Validate required fields (activationPrice is optional - will be calculated)
             if not all([symbol, entry_side_str, callback_rate]):
@@ -730,6 +779,13 @@ class BinanceHandler:
             # Round quantity to symbol precision
             executed_qty = self._round_quantity_to_precision(formatted_symbol, raw_quantity)
             
+            # ============================================================
+            # MINIMUM NOTIONAL VALIDATION (Binance requires min 100 USDT)
+            # ============================================================
+            # Calculate notional value: quantity × price
+            notional_value = executed_qty * current_price
+            min_notional = 100.0  # Binance Futures minimum notional value (100 USDT)
+            
             logger.info(f"📊 Order Calculation:")
             logger.info(f"   💰 Balance: ${available_balance:.2f}")
             logger.info(f"   📈 Order %: {coin_config['order_size_percentage']}%")
@@ -737,6 +793,34 @@ class BinanceHandler:
             logger.info(f"   💵 Base Amount: ${order_amount:.2f}")
             logger.info(f"   💪 Leveraged: ${leveraged_amount:.2f}")
             logger.info(f"   🎯 Quantity: {executed_qty:.6f}")
+            logger.info(f"   💲 Notional Value: ${notional_value:.2f} (Min Required: ${min_notional:.2f})")
+            
+            # Check if notional value meets minimum requirement
+            if notional_value < min_notional:
+                # Try to increase quantity to meet minimum
+                required_qty = (min_notional / current_price)
+                required_qty = self._round_quantity_to_precision(formatted_symbol, required_qty)
+                new_notional = required_qty * current_price
+                
+                # Check if we have enough balance for the increased quantity
+                required_balance = (required_qty * current_price) / coin_config['leverage']
+                
+                if required_balance <= available_balance:
+                    logger.warning(f"⚠️ Notional value ${notional_value:.2f} below minimum ${min_notional:.2f}")
+                    logger.warning(f"   Increasing quantity to meet minimum: {required_qty:.6f}")
+                    logger.warning(f"   New notional: ${new_notional:.2f}")
+                    logger.warning(f"   Required balance: ${required_balance:.2f} (Available: ${available_balance:.2f})")
+                    executed_qty = required_qty
+                    notional_value = new_notional
+                else:
+                    error_msg = f"Order notional ${notional_value:.2f} below minimum ${min_notional} USDT. Required balance: ${required_balance:.2f}, Available: ${available_balance:.2f}. Increase balance or order size percentage."
+                    logger.error(f"❌ {error_msg}")
+                    return {
+                        "success": False,
+                        "error": error_msg
+                    }
+            
+            logger.info(f"✅ Notional validation passed: ${notional_value:.2f} >= ${min_notional:.2f}")
             
             # Determine Binance API side and position side
             binance_side = 'BUY' if direction == 'long' else 'SELL'
@@ -748,6 +832,7 @@ class BinanceHandler:
             logger.info(f"   Side: {binance_side}")
             logger.info(f"   Position Side: {position_side}")
             logger.info(f"   Quantity: {executed_qty}")
+            logger.info(f"   Notional: ${notional_value:.2f}")
             logger.info(f"   ⚠️ SKIPPING TP/SL (Trailing stop will manage exit)")
             
             # Build order parameters
@@ -770,6 +855,7 @@ class BinanceHandler:
                 logger.info(f"   Status: {entry_result.get('status', 'N/A')}")
                 
                 entry_order_id = entry_result.get('orderId', 'N/A')
+                initial_status = entry_result.get('status', '').upper()
                 
             except Exception as entry_error:
                 logger.error(f"❌ ENTRY ORDER FAILED: {str(entry_error)}")
@@ -777,32 +863,141 @@ class BinanceHandler:
             
             logger.info(f"   Position Size: {executed_qty}")
             
-            # Wait for position to settle
+            # ============================================================
+            # ENTRY ORDER FILL VERIFICATION
+            # ============================================================
+            logger.info("=" * 80)
+            logger.info("🔍 ENTRY ORDER FILL VERIFICATION")
+            logger.info("=" * 80)
+            
+            # For MARKET orders, they should be FILLED immediately, but verify
+            max_verification_attempts = 5
+            verification_delay = 1.0  # seconds
+            entry_filled = False
+            
+            if initial_status == 'FILLED':
+                logger.info(f"✅ Entry order already FILLED (status: {initial_status})")
+                entry_filled = True
+            else:
+                logger.info(f"⏳ Verifying entry order fill status (initial: {initial_status})...")
+                logger.info(f"   Max attempts: {max_verification_attempts}, Delay: {verification_delay}s")
+                
+                for attempt in range(max_verification_attempts):
+                    try:
+                        # Check order status
+                        order_status = self.client.futures_get_order(
+                            symbol=formatted_symbol,
+                            orderId=entry_order_id
+                        )
+                        
+                        order_status_str = order_status.get('status', '').upper()
+                        logger.info(f"   Attempt {attempt + 1}/{max_verification_attempts}: Status = {order_status_str}")
+                        
+                        if order_status_str == 'FILLED':
+                            logger.info(f"✅✅✅ ENTRY ORDER FILLED SUCCESSFULLY ✅✅✅")
+                            logger.info(f"   Filled Quantity: {order_status.get('executedQty', 'N/A')}")
+                            logger.info(f"   Average Price: {order_status.get('avgPrice', 'N/A')}")
+                            entry_filled = True
+                            break
+                        elif order_status_str in ['CANCELED', 'EXPIRED', 'REJECTED']:
+                            error_msg = f"Entry order {order_status_str.lower()}: {order_status.get('status', 'N/A')}"
+                            logger.error(f"❌ {error_msg}")
+                            return {"success": False, "error": error_msg}
+                        else:
+                            # Status is NEW, PARTIALLY_FILLED, etc. - wait and retry
+                            if attempt < max_verification_attempts - 1:
+                                logger.info(f"   Waiting {verification_delay}s before next check...")
+                                time.sleep(verification_delay)
+                    
+                    except Exception as status_error:
+                        logger.warning(f"⚠️ Could not verify order status (attempt {attempt + 1}): {str(status_error)}")
+                        if attempt < max_verification_attempts - 1:
+                            time.sleep(verification_delay)
+                        else:
+                            # Last attempt failed - log warning but continue (MARKET orders usually fill fast)
+                            logger.warning(f"⚠️ Could not verify fill status after {max_verification_attempts} attempts")
+                            logger.warning(f"   Assuming order is filled (MARKET orders fill quickly)")
+                            entry_filled = True  # Assume filled for MARKET orders
+            
+            if not entry_filled:
+                error_msg = f"Entry order not filled after {max_verification_attempts} verification attempts"
+                logger.error(f"❌❌❌ {error_msg} ❌❌❌")
+                return {"success": False, "error": error_msg}
+            
+            # Wait for position to settle after fill confirmation
             logger.info("⏳ Waiting 1 second for position to settle...")
             time.sleep(1.0)
             
             # ============================================================
-            # STEP 2.5: GET ENTRY PRICE & CALCULATE ACTIVATION/STOP
+            # STEP 2.5: POSITION VERIFICATION & GET ENTRY PRICE
             # ============================================================
             logger.info("=" * 80)
-            logger.info("📊 STEP 2.5: CALCULATING ACTIVATION & STOP PRICES")
+            logger.info("📊 STEP 2.5: POSITION VERIFICATION & PRICE CALCULATION")
             logger.info("=" * 80)
             
-            # Get actual entry price
+            # Verify position was actually opened and get entry price
             entry_price = current_price  # Fallback to order price
+            actual_position_size = 0.0
+            position_found = False
             
-            # Try to get more accurate entry price from position
             try:
+                logger.info("🔍 Verifying position was opened...")
                 positions = self.get_open_positions()
+                
                 for pos in positions:
                     if pos.get('symbol') == formatted_symbol:
-                        pos_entry = float(pos.get('entryPrice', 0))
-                        if pos_entry > 0:
-                            entry_price = pos_entry
-                            logger.info(f"✅ Got entry price from position: ${entry_price:.6f}")
-                            break
+                        # Check position side matches our direction
+                        pos_amt = float(pos.get('positionAmt', '0'))
+                        
+                        # For LONG: positionAmt > 0, For SHORT: positionAmt < 0
+                        if direction == 'long' and pos_amt > 0:
+                            position_found = True
+                            actual_position_size = abs(pos_amt)
+                            pos_entry = float(pos.get('entryPrice', 0))
+                            if pos_entry > 0:
+                                entry_price = pos_entry
+                                logger.info(f"✅ Position verified (LONG):")
+                                logger.info(f"   Entry Price: ${entry_price:.6f}")
+                                logger.info(f"   Position Size: {actual_position_size:.6f}")
+                                logger.info(f"   Leverage: {pos.get('leverage', 'N/A')}x")
+                                break
+                        elif direction == 'short' and pos_amt < 0:
+                            position_found = True
+                            actual_position_size = abs(pos_amt)
+                            pos_entry = float(pos.get('entryPrice', 0))
+                            if pos_entry > 0:
+                                entry_price = pos_entry
+                                logger.info(f"✅ Position verified (SHORT):")
+                                logger.info(f"   Entry Price: ${entry_price:.6f}")
+                                logger.info(f"   Position Size: {actual_position_size:.6f}")
+                                logger.info(f"   Leverage: {pos.get('leverage', 'N/A')}x")
+                                break
+                
+                if not position_found:
+                    logger.warning(f"⚠️ Position not found in open positions for {formatted_symbol}")
+                    logger.warning(f"   Using current market price as entry: ${entry_price:.6f}")
+                elif actual_position_size == 0:
+                    logger.warning(f"⚠️ Position found but size is zero - using calculated quantity")
+                    actual_position_size = executed_qty
+                else:
+                    # Verify position size matches our order (allow small tolerance for slippage)
+                    size_diff = abs(actual_position_size - executed_qty)
+                    size_diff_pct = (size_diff / executed_qty) * 100 if executed_qty > 0 else 0
+                    
+                    if size_diff_pct > 5.0:  # More than 5% difference
+                        logger.warning(f"⚠️ Position size mismatch:")
+                        logger.warning(f"   Expected: {executed_qty:.6f}")
+                        logger.warning(f"   Actual: {actual_position_size:.6f}")
+                        logger.warning(f"   Difference: {size_diff_pct:.2f}%")
+                        logger.warning(f"   Using actual position size for trailing stop")
+                        executed_qty = actual_position_size
+                    else:
+                        logger.info(f"✅ Position size verified: {actual_position_size:.6f} (diff: {size_diff_pct:.2f}%)")
+                    
             except Exception as e:
-                logger.warning(f"Could not get entry from position, using order price: {str(e)}")
+                logger.warning(f"⚠️ Could not verify position: {str(e)}")
+                logger.warning(f"   Using current market price as entry: ${entry_price:.6f}")
+                logger.warning(f"   Using calculated quantity: {executed_qty:.6f}")
             
             # Calculate activation price if not provided
             if activation_price_input:
@@ -860,19 +1055,30 @@ class BinanceHandler:
             position_side = 'LONG' if direction == 'long' else 'SHORT'
             
             # Prepare trailing stop parameters
-            # Note: TRAILING_STOP_MARKET does NOT support closePosition parameter
-            # We must use quantity + correct side to close the position
+            # ============================================================
+            # IMPORTANT NOTES ON TRAILING_STOP_MARKET PARAMETERS:
+            # ============================================================
+            # 1. TRAILING_STOP_MARKET does NOT support 'closePosition' parameter
+            #    We MUST use 'quantity' to specify how much to close
+            # 2. TRAILING_STOP_MARKET does NOT support 'reduceOnly' parameter
+            #    However, using 'quantity' equal to position size provides reduce-only behavior:
+            #    - We set quantity = executed_qty (exact position size)
+            #    - This ensures we only close existing position, never open reverse
+            # 3. Side must be OPPOSITE of entry:
+            #    - LONG entry (BUY) -> SELL trailing stop (close long)
+            #    - SHORT entry (SELL) -> BUY trailing stop (close short)
+            # ============================================================
             trailing_params = {
-                'symbol': formatted_symbol,  # FIX: Use formatted_symbol instead of symbol
-                'side': trailing_side,
+                'symbol': formatted_symbol,
+                'side': trailing_side,  # OPPOSITE of entry side
                 'type': 'TRAILING_STOP_MARKET',
-                'quantity': executed_qty,  # Must specify quantity
-                'callbackRate': callback_rate,
+                'quantity': executed_qty,  # Must specify quantity (equals position size = reduce-only behavior)
+                'callbackRate': callback_rate,  # Already validated: 0.1 - 5.0%
                 'activationPrice': activation_price,
                 'workingType': working_type
             }
             
-            # Add positionSide only if in hedge mode
+            # Add positionSide only if in hedge mode (required for hedge mode)
             if is_hedge_mode:
                 trailing_params['positionSide'] = position_side
             
@@ -918,17 +1124,66 @@ class BinanceHandler:
                     }
                     
                 except Exception as trailing_error:
+                    # ============================================================
+                    # ENHANCED ERROR HANDLING: Parse Binance API error codes
+                    # ============================================================
                     error_msg = str(trailing_error)
-                    logger.warning(f"⚠️ Trailing stop attempt {attempt + 1} failed: {error_msg}")
+                    error_code = None
+                    user_friendly_msg = error_msg
                     
-                    if attempt < max_retries - 1:
+                    # Try to extract Binance error code
+                    if hasattr(trailing_error, 'code'):
+                        error_code = trailing_error.code
+                    elif isinstance(trailing_error, BinanceAPIException):
+                        error_code = trailing_error.code
+                    else:
+                        # Try to parse error code from error message string
+                        import re
+                        code_match = re.search(r'code[:\s-]+(-?\d+)', error_msg, re.IGNORECASE)
+                        if code_match:
+                            error_code = code_match.group(1)
+                    
+                    # Map common Binance error codes to user-friendly messages
+                    if error_code:
+                        error_code_map = {
+                            '-4120': 'TRAILING_STOP_MARKET order type requires Algo Order API (already using)',
+                            '-2010': f'Invalid callback rate: {callback_rate}% (must be between 0.1% and 5.0%)',
+                            '-2011': f'Invalid activation price: ${activation_price:.2f} (check price direction)',
+                            '-1021': 'Timestamp for this request is outside recvWindow',
+                            '-1022': 'Signature for this request is not valid',
+                            '-1121': 'Invalid symbol: Symbol not found or inactive',
+                            '-1111': 'Invalid precision: Order quantity or price precision error',
+                            '-4001': 'Insufficient margin balance',
+                            '-4002': 'Position not found or already closed',
+                            '-4003': 'Position mode error: Check if hedge mode is enabled'
+                        }
+                        user_friendly_msg = error_code_map.get(str(error_code), error_msg)
+                        logger.warning(f"⚠️ Trailing stop attempt {attempt + 1} failed:")
+                        logger.warning(f"   Error Code: {error_code}")
+                        logger.warning(f"   Error Message: {user_friendly_msg}")
+                    else:
+                        logger.warning(f"⚠️ Trailing stop attempt {attempt + 1} failed: {error_msg}")
+                    
+                    # Check for specific error types that shouldn't retry
+                    non_retryable_errors = ['-2010', '-2011', '-1121', '-4002']  # Invalid params, symbol, position
+                    should_retry = error_code not in non_retryable_errors if error_code else True
+                    
+                    if attempt < max_retries - 1 and should_retry:
                         wait_time = (attempt + 1) * 0.5
                         logger.info(f"   Waiting {wait_time}s before retry...")
                         time.sleep(wait_time)
                     else:
                         # ALL RETRIES FAILED - ACTIVATE FALLBACK
-                        logger.error(f"❌❌❌ TRAILING STOP FAILED AFTER {max_retries} ATTEMPTS ❌❌❌")
-                        logger.error(f"   Last Error: {error_msg}")
+                        if not should_retry and error_code:
+                            logger.error(f"❌❌❌ TRAILING STOP FAILED (Non-retryable error) ❌❌❌")
+                            logger.error(f"   Error Code: {error_code}")
+                            logger.error(f"   Error: {user_friendly_msg}")
+                        else:
+                            logger.error(f"❌❌❌ TRAILING STOP FAILED AFTER {max_retries} ATTEMPTS ❌❌❌")
+                            logger.error(f"   Last Error: {user_friendly_msg}")
+                            if error_code:
+                                logger.error(f"   Error Code: {error_code}")
+                        
                         logger.error(f"   ACTIVATING FALLBACK: Placing STOP_MARKET order")
                         break
             
@@ -969,9 +1224,11 @@ class BinanceHandler:
                 try:
                     fallback_order = self.client.futures_create_order(**fallback_params)
                     
-                    logger.info(f"✅ FALLBACK STOP_MARKET ORDER PLACED")
+                    logger.info(f"✅✅✅ FALLBACK STOP_MARKET ORDER PLACED SUCCESSFULLY ✅✅✅")
                     logger.info(f"   Order ID: {fallback_order.get('orderId', 'N/A')}")
+                    logger.info(f"   Status: {fallback_order.get('status', 'N/A')}")
                     logger.info(f"   Stop Price: ${stop_loss_price:.2f}")
+                    logger.warning(f"⚠️ Trailing stop rejected - using hard stop as fallback protection")
                     
                     return {
                         "success": True,
@@ -979,12 +1236,44 @@ class BinanceHandler:
                         "order_id": entry_order_id,
                         "fallback_stop_id": fallback_order.get('orderId', 'N/A'),
                         "strategy": "FALLBACK_STOP_MARKET",
-                        "warning": "Trailing stop rejected by exchange"
+                        "warning": "Trailing stop rejected by exchange - using hard stop"
                     }
                     
                 except Exception as fallback_error:
+                    # ============================================================
+                    # ENHANCED FALLBACK ERROR HANDLING
+                    # ============================================================
+                    error_msg = str(fallback_error)
+                    error_code = None
+                    user_friendly_msg = error_msg
+                    
+                    # Try to extract Binance error code
+                    if hasattr(fallback_error, 'code'):
+                        error_code = fallback_error.code
+                    elif isinstance(fallback_error, BinanceAPIException):
+                        error_code = fallback_error.code
+                    else:
+                        import re
+                        code_match = re.search(r'code[:\s-]+(-?\d+)', error_msg, re.IGNORECASE)
+                        if code_match:
+                            error_code = code_match.group(1)
+                    
+                    # Map common Binance error codes for fallback
+                    if error_code:
+                        fallback_error_map = {
+                            '-2010': f'Invalid stop price: ${stop_loss_price:.2f} (check price direction vs entry)',
+                            '-2011': 'Order rejected: Invalid stop price or position already closed',
+                            '-1121': f'Invalid symbol: {formatted_symbol} not found or inactive',
+                            '-1111': f'Invalid precision: Stop price precision error for {formatted_symbol}',
+                            '-4002': 'Position not found: Position may have been closed',
+                            '-4001': 'Insufficient margin: Cannot place stop order'
+                        }
+                        user_friendly_msg = fallback_error_map.get(str(error_code), error_msg)
+                    
                     logger.error(f"❌❌❌ FALLBACK ALSO FAILED ❌❌❌")
-                    logger.error(f"   Error: {str(fallback_error)}")
+                    logger.error(f"   Error: {user_friendly_msg}")
+                    if error_code:
+                        logger.error(f"   Error Code: {error_code}")
                     
                     # CRITICAL FIX: If both trailing stop and fallback failed, place TP/SL as last resort
                     logger.warning("🛡️ Last resort: Placing TP/SL orders as protection...")
@@ -1562,13 +1851,39 @@ class BinanceHandler:
             endpoint = '/fapi/v1/algo/order'
             url = f"{self.base_url}{endpoint}"
             
+            # ============================================================
+            # FINAL VALIDATION: callbackRate format check before API call
+            # ============================================================
+            # callbackRate should already be validated (0.1 - 5.0%), but double-check
+            if not isinstance(callback_rate, (int, float)):
+                raise ValueError(f"callbackRate must be numeric, got: {type(callback_rate)}")
+            
+            if callback_rate < 0.1 or callback_rate > 5.0:
+                raise ValueError(f"callbackRate {callback_rate}% is out of Binance limits (0.1% - 5.0%)")
+            
+            # Ensure callbackRate is float (Binance API may require specific format)
+            callback_rate_float = float(callback_rate)
+            
+            # Validate activation_price is positive
+            if activation_price <= 0:
+                raise ValueError(f"activationPrice must be positive, got: {activation_price}")
+            
+            # Validate quantity is positive
+            if quantity <= 0:
+                raise ValueError(f"quantity must be positive, got: {quantity}")
+            
+            logger.info(f"✅ Final parameter validation passed:")
+            logger.info(f"   callbackRate: {callback_rate_float}% (validated: 0.1% - 5.0%)")
+            logger.info(f"   activationPrice: ${activation_price:.2f} (validated: > 0)")
+            logger.info(f"   quantity: {quantity:.6f} (validated: > 0)")
+            
             # Build parameters
             params = {
                 'symbol': symbol,
                 'side': side,
                 'type': 'TRAILING_STOP_MARKET',
                 'quantity': quantity,
-                'callbackRate': callback_rate,
+                'callbackRate': callback_rate_float,  # Ensure float format
                 'activationPrice': activation_price,
                 'workingType': working_type,
                 'timestamp': int(time_module.time() * 1000)
