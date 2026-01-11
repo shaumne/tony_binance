@@ -1,113 +1,266 @@
 #!/bin/bash
-# JP saati 00:28'de oluşan alert hatalarını bulma komutu
-# NOT: Sistem UTC formatında çalışıyor. JST 00:28 = UTC 15:28 (önceki gün)
+# JP saatlerinde oluşan alert'leri, webhook'ları ve pozisyon sonuçlarını bulma komutu
+# NOT: Sistem UTC formatında çalışıyor. JST = UTC + 9 saat
 
 LOG_FILE="logs/app.log"
 
+# JP saatleri ve UTC karşılıkları
+# JST 08:10 = UTC 23:10 (önceki gün)
+# JST 07:07 = UTC 22:07 (önceki gün)
+# JST 06:06 = UTC 21:06 (önceki gün)
+# JST 02:52 = UTC 17:52 (önceki gün)
+# JST 00:29 = UTC 15:29 (önceki gün)
+
 # Timezone bilgisi
 echo "=========================================="
-echo "JP SAATİ 00:28 ALERT HATA ANALİZİ"
+echo "JP SAATLERİ ALERT & WEBHOOK ANALİZİ"
 echo "=========================================="
 echo ""
 echo "⚠️  NOT: Sistem UTC formatında çalışıyor"
 echo "    JST (Japonya Saati) = UTC + 9 saat"
-echo "    JST 00:28 = UTC 15:28 (önceki gün)"
 echo ""
-echo "    Örnek: 10 Ocak 2026 JST 00:28 = 9 Ocak 2026 UTC 15:28"
+echo "📋 Analiz edilecek saatler:"
+echo "   JST 08:10 → UTC 23:10 (önceki gün)"
+echo "   JST 07:07 → UTC 22:07 (önceki gün)"
+echo "   JST 06:06 → UTC 21:06 (önceki gün)"
+echo "   JST 02:52 → UTC 17:52 (önceki gün)"
+echo "   JST 00:29 → UTC 15:29 (önceki gün)"
 echo ""
 echo "=========================================="
 echo ""
 
-# Ana arama: UTC 15:28 formatında (JST 00:28'e karşılık gelir)
-echo "1. UTC 15:28:xx zamanındaki alert ve hata mesajları (JST 00:28 karşılığı):"
-echo "---------------------------------------------------"
-echo "Arama kriteri: 15:28:xx (UTC zamanı)"
-echo ""
-
-# UTC formatında 15:28:xx'i ara (JST 00:28'e karşılık gelir)
-grep -E "202[0-9]-[0-9]{2}-[0-9]{2}.*15:28:[0-9]{2}" "$LOG_FILE" -B 30 -A 100 | \
-  grep -E "(Webhook received|webhook|alert|TRAILING|ERROR|error|FAILED|failed|Exception|exception|Traceback|❌|⚠️|15:28)" --color=always | \
-  head -80
-
-echo ""
-echo ""
-
-# Tarih bazlı arama (önceki gün UTC 15:28)
-echo "2. Önceki günün UTC 15:28:xx zamanındaki detaylı loglar:"
-echo "---------------------------------------------------"
-# Önceki günün tarihini hesapla (UTC bazlı)
-PREV_DATE=$(date -u -d "yesterday" +"%Y-%m-%d" 2>/dev/null || date -u -v-1d +"%Y-%m-%d" 2>/dev/null || date -u --date="yesterday" +"%Y-%m-%d" 2>/dev/null || echo "")
-
-if [ ! -z "$PREV_DATE" ]; then
-    echo "Aranan tarih: $PREV_DATE (önceki gün UTC)"
+# Fonksiyon: Belirli bir UTC saati için webhook, pozisyon ve hata analizi
+analyze_time() {
+    local jst_time=$1
+    local utc_time=$2
+    local time_label=$3
+    
     echo ""
-    grep -E "$PREV_DATE.*15:28:[0-9]{2}" "$LOG_FILE" -B 20 -A 150 | \
-      grep -E "(Webhook received|webhook|TRAILING_STOP|callbackRate|activationPrice|ERROR|error|FAILED|failed|Exception|exception|Traceback|❌|⚠️|15:28)" --color=always
-else
-    echo "⚠️  Tarih hesaplanamadı, manuel tarih ile arayın:"
-    echo "    grep -E '2026-01-09.*15:28' logs/app.log -B 30 -A 100"
-fi
-
-echo ""
-echo ""
-
-# JST 00:28 için alternatif arama (doğrudan 00:28 string'i içeren satırlar)
-echo "3. '00:28' string'ini içeren satırlar (eğer log JST formatındaysa):"
-echo "---------------------------------------------------"
-grep -n "00:28:[0-9]{2}" "$LOG_FILE" 2>/dev/null | head -5 | while IFS=: read line_num rest; do
-    start_line=$((line_num - 20))
-    end_line=$((line_num + 100))
-    if [ $start_line -lt 1 ]; then start_line=1; fi
+    echo "=========================================="
+    echo "🕐 $time_label (JST $jst_time → UTC $utc_time)"
+    echo "=========================================="
     echo ""
-    echo ">>> Satır $line_num civarında (00:28 içeren):"
-    sed -n "${start_line},${end_line}p" "$LOG_FILE" | grep -E "(ERROR|error|FAILED|failed|Exception|exception|Traceback|webhook|alert|TRAILING|00:28)" --color=always
-    echo "---"
-done
-
-echo ""
-echo ""
-
-# En kapsamlı arama: UTC 15:28:xx formatı
-echo "4. UTC 15:28:xx formatındaki TÜM satırlar ve hatalar (En kapsamlı):"
-echo "---------------------------------------------------"
-grep -n "15:28:[0-9]{2}" "$LOG_FILE" | tail -5 | while IFS=: read line_num rest; do
-    if [ ! -z "$line_num" ]; then
+    
+    # UTC saat formatı (örn: 15:29)
+    utc_hour=$(echo $utc_time | cut -d: -f1)
+    utc_min=$(echo $utc_time | cut -d: -f2)
+    
+    # 1. Webhook alındı mesajları
+    echo "📥 1. WEBHOOK ALINDI MESAJLARI:"
+    echo "---------------------------------------------------"
+    webhook_count=$(grep -E "202[0-9]-[0-9]{2}-[0-9]{2}.*${utc_hour}:${utc_min}:[0-9]{2}" "$LOG_FILE" | \
+      grep -c "Webhook received" 2>/dev/null || echo "0")
+    
+    if [ "$webhook_count" -gt 0 ]; then
+        echo "📊 Toplam webhook sayısı: $webhook_count"
         echo ""
-        echo ">>> Satır $line_num (UTC 15:28:xx):"
-        sed -n "${line_num},$((line_num + 200))p" "$LOG_FILE" | \
-          grep -E "(Webhook received|webhook received|TRAILING_STOP|TRAILING STOP|callbackRate|activationPrice|ERROR|error|FAILED|failed|Exception|exception|Traceback|❌|⚠️|FALLBACK|Entry order|Trailing stop)" --color=always | \
-          head -100
-        echo "---"
+        grep -E "202[0-9]-[0-9]{2}-[0-9]{2}.*${utc_hour}:${utc_min}:[0-9]{2}" "$LOG_FILE" | \
+          grep -E "Webhook received|webhook received" | \
+          tail -10 | while read line; do
+            # Tarih ve zamanı göster
+            timestamp=$(echo "$line" | grep -oE "202[0-9]-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}" | head -1)
+            # Webhook içeriğini parse et
+            if echo "$line" | grep -q "trailType.*TRAILING_STOP_MARKET"; then
+                # Trailing stop webhook
+                symbol=$(echo "$line" | grep -oE "'symbol': '[^']*'" | cut -d"'" -f4 || echo "N/A")
+                side=$(echo "$line" | grep -oE "'side': '[^']*'" | cut -d"'" -f4 || echo "N/A")
+                callback=$(echo "$line" | grep -oE "'callbackRate': [0-9.]+" | cut -d" " -f2 || echo "N/A")
+                echo "  🕐 $timestamp | 🔥 TRAILING STOP | Symbol: $symbol | Side: $side | Callback: ${callback}%"
+            else
+                # Standard webhook
+                signal=$(echo "$line" | grep -oE "'signal': '[^']*'" | cut -d"'" -f4 || echo "N/A")
+                echo "  🕐 $timestamp | 📨 Standard | Signal: $signal"
+            fi
+          done
+    else
+        echo "⚠️  Bu saatte webhook bulunamadı"
     fi
-done
+    
+    echo ""
+    
+    # 2. Entry order sonuçları
+    echo "📤 2. ENTRY ORDER SONUÇLARI:"
+    echo "---------------------------------------------------"
+    entry_results=$(grep -E "202[0-9]-[0-9]{2}-[0-9]{2}.*${utc_hour}:${utc_min}:[0-9]{2}" "$LOG_FILE" -A 100 | \
+      grep -E "ENTRY ORDER PLACED SUCCESSFULLY|ENTRY ORDER FILLED SUCCESSFULLY|ENTRY ORDER FAILED|Order ID.*[0-9]|entry_order_id|APIError.*code=-4164|Notional.*below minimum" | \
+      head -20)
+    
+    if [ ! -z "$entry_results" ]; then
+        echo "$entry_results" | while read line; do
+            # Başarılı entry order
+            if echo "$line" | grep -qE "ENTRY ORDER.*SUCCESSFULLY|ENTRY ORDER FILLED"; then
+                order_id=$(echo "$line" | grep -oE "Order ID: [0-9]+|orderId.*[0-9]+" | head -1 | grep -oE "[0-9]+" | head -1)
+                echo "  ✅ Entry Order Başarılı | Order ID: $order_id"
+            # Başarısız entry order
+            elif echo "$line" | grep -qE "ENTRY ORDER FAILED|APIError.*code=-4164|Notional.*below minimum"; then
+                error_msg=$(echo "$line" | grep -oE "APIError.*code=-[0-9]+|Notional.*below minimum|Entry order.*failed" | head -1)
+                echo "  ❌ Entry Order Başarısız | $error_msg"
+            # Order ID
+            elif echo "$line" | grep -qE "Order ID|entry_order_id"; then
+                order_id=$(echo "$line" | grep -oE "[0-9]+" | head -1)
+                echo "    └─ Order ID: $order_id"
+            fi
+        done
+    else
+        echo "⚠️  Entry order sonucu bulunamadı"
+    fi
+    
+    echo ""
+    
+    # 3. Trailing stop sonuçları
+    echo "🎯 3. TRAILING STOP SONUÇLARI:"
+    echo "---------------------------------------------------"
+    trailing_results=$(grep -E "202[0-9]-[0-9]{2}-[0-9]{2}.*${utc_hour}:${utc_min}:[0-9]{2}" "$LOG_FILE" -A 150 | \
+      grep -E "TRAILING STOP ORDER PLACED SUCCESSFULLY|TRAILING STOP.*FAILED|FALLBACK.*STOP_MARKET|FALLBACK.*PLACED|callbackRate.*validated|trailing_stop_id.*[0-9]+" | \
+      grep -v "Webhook received" | \
+      head -25)
+    
+    if [ ! -z "$trailing_results" ]; then
+        echo "$trailing_results" | while read line; do
+            # Başarılı trailing stop
+            if echo "$line" | grep -qE "TRAILING STOP ORDER PLACED SUCCESSFULLY"; then
+                order_id=$(echo "$line" | grep -oE "Order ID.*[0-9]+|orderId.*[0-9]+" | grep -oE "[0-9]+" | head -1)
+                echo "  ✅ Trailing Stop Başarılı | Order ID: $order_id"
+            # Fallback stop
+            elif echo "$line" | grep -qE "FALLBACK.*STOP_MARKET|FALLBACK.*PLACED"; then
+                order_id=$(echo "$line" | grep -oE "Order ID.*[0-9]+|orderId.*[0-9]+" | grep -oE "[0-9]+" | head -1)
+                echo "  ⚠️  Fallback Stop (Hard Stop) | Order ID: $order_id"
+            # Başarısız trailing stop
+            elif echo "$line" | grep -qE "TRAILING STOP.*FAILED"; then
+                error_msg=$(echo "$line" | grep -oE "code=-[0-9]+|Invalid.*callback|Error.*trailing" | head -1)
+                echo "  ❌ Trailing Stop Başarısız | $error_msg"
+            # Callback rate validated
+            elif echo "$line" | grep -qE "callbackRate.*validated"; then
+                callback=$(echo "$line" | grep -oE "[0-9.]+%" | head -1)
+                echo "    └─ Callback Rate: $callback (validated)"
+            fi
+        done
+    else
+        echo "⚠️  Trailing stop sonucu bulunamadı (standart strateji veya trailing stop yok)"
+    fi
+    
+    echo ""
+    
+    # 4. Hata mesajları (sadece gerçek hatalar)
+    echo "❌ 4. HATA MESAJLARI:"
+    echo "---------------------------------------------------"
+    error_results=$(grep -E "202[0-9]-[0-9]{2}-[0-9]{2}.*${utc_hour}:${utc_min}:[0-9]{2}" "$LOG_FILE" -A 100 | \
+      grep -E "__main__.*ERROR|binance_handler.*ERROR|❌.*ORDER.*FAILED|❌.*ERROR|APIError.*code=-|Exception.*:" | \
+      grep -vE "INFO.*OK|INFO.*READY|INFO.*Coin Config Manager" | \
+      head -20)
+    
+    if [ ! -z "$error_results" ]; then
+        echo "$error_results" | while read line; do
+            # ERROR seviyesi loglar
+            if echo "$line" | grep -qE "__main__.*ERROR|binance_handler.*ERROR"; then
+                error_msg=$(echo "$line" | sed 's/.*ERROR - //' | sed 's/.*❌ //')
+                timestamp=$(echo "$line" | grep -oE "202[0-9]-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}" | head -1)
+                echo "  🕐 $timestamp | ❌ $error_msg"
+            # API Error
+            elif echo "$line" | grep -qE "APIError.*code=-"; then
+                error_code=$(echo "$line" | grep -oE "code=-[0-9]+" | head -1)
+                error_msg=$(echo "$line" | sed 's/.*APIError(//' | sed 's/).*//')
+                echo "  ❌ API Error $error_code | $error_msg"
+            fi
+        done
+    else
+        echo "✅ Bu saatte hata bulunamadı"
+    fi
+    
+    echo ""
+    
+    # 5. Pozisyon bilgileri
+    echo "📍 5. POZİSYON BİLGİLERİ:"
+    echo "---------------------------------------------------"
+    position_results=$(grep -E "202[0-9]-[0-9]{2}-[0-9]{2}.*${utc_hour}:${utc_min}:[0-9]{2}" "$LOG_FILE" -A 100 | \
+      grep -E "Position verified.*LONG|Position verified.*SHORT|Position Size: [0-9.]+|Entry Price:.*[0-9]|Found [0-9]+ active positions" | \
+      head -15)
+    
+    if [ ! -z "$position_results" ]; then
+        echo "$position_results" | while read line; do
+            # Position verified
+            if echo "$line" | grep -qE "Position verified"; then
+                direction=$(echo "$line" | grep -oE "LONG|SHORT" | head -1)
+                size=$(echo "$line" | grep -oE "Position Size: [0-9.]+" | grep -oE "[0-9.]+" | head -1)
+                price=$(echo "$line" | grep -oE "Entry Price:.*[0-9.]+" | grep -oE "[0-9.]+" | head -1)
+                echo "  ✅ Position Verified | Direction: $direction | Size: $size | Entry: $price"
+            # Active positions count
+            elif echo "$line" | grep -qE "Found.*active positions"; then
+                count=$(echo "$line" | grep -oE "Found [0-9]+" | grep -oE "[0-9]+")
+                echo "  📊 Active Positions: $count"
+            fi
+        done
+    else
+        echo "⚠️  Pozisyon bilgisi bulunamadı"
+    fi
+    
+    echo ""
+    
+    # 6. Detaylı timeline (en son webhook'tan sonraki 200 satır)
+    echo ""
+    echo "📊 6. DETAYLI TIMELINE (En son webhook'tan sonraki önemli olaylar):"
+    echo "---------------------------------------------------"
+    # En son webhook satır numarasını bul
+    last_webhook_line=$(grep -n "Webhook received.*${utc_hour}:${utc_min}" "$LOG_FILE" | tail -1 | cut -d: -f1)
+    
+    if [ ! -z "$last_webhook_line" ]; then
+        sed -n "${last_webhook_line},$((last_webhook_line + 200))p" "$LOG_FILE" | \
+          grep -E "(🔥 TRAILING STOP STRATEGY|📤 STEP 2|ENTRY ORDER.*SUCCESSFULLY|ENTRY ORDER.*FAILED|ENTRY ORDER FILLED|🎯 STEP 3|TRAILING STOP ORDER.*PLACED|TRAILING STOP.*FAILED|FALLBACK|✅✅✅|❌❌❌|Position verified|Order ID.*[0-9]+)" --color=always | \
+          head -50
+    else
+        echo "⚠️  Webhook satırı bulunamadı"
+    fi
+    
+    echo ""
+    echo "---"
+}
+
+# Her saat için analiz yap
+analyze_time "00:29" "15:29" "JP SAATİ 00:29"
+analyze_time "02:52" "17:52" "JP SAATİ 02:52"
+analyze_time "06:06" "21:06" "JP SAATİ 06:06"
+analyze_time "07:07" "22:07" "JP SAATİ 07:07"
+analyze_time "08:10" "23:10" "JP SAATİ 08:10"
 
 echo ""
 echo ""
 
-# Özel tarih ile arama (10 Ocak 2026 JST 00:28 = 9 Ocak 2026 UTC 15:28)
-echo "5. 9 Ocak 2026 UTC 15:28:xx (10 Ocak 2026 JST 00:28) için spesifik arama:"
-echo "---------------------------------------------------"
-grep -E "2026-01-09.*15:28:[0-9]{2}" "$LOG_FILE" -B 50 -A 200 | \
-  grep -E "(2026-01-09 15:28|Webhook received|webhook|TRAILING|ERROR|error|FAILED|failed|Exception|exception|Traceback|❌|⚠️|FALLBACK|callbackRate|activationPrice|Entry order)" --color=always | \
-  head -150
-
-echo ""
 echo ""
 echo "=========================================="
-echo "ÖNERİLEN KOMUTLAR:"
+echo "ÖZET VE ÖNERİLEN KOMUTLAR"
 echo "=========================================="
 echo ""
-echo "1. En detaylı analiz (UTC 15:28 formatı):"
-echo "   grep -E '15:28:[0-9]{2}' logs/app.log -B 50 -A 200 | less"
+echo "📋 Analiz edilen saatler:"
+echo "   JST 00:29 → UTC 15:29"
+echo "   JST 02:52 → UTC 17:52"
+echo "   JST 06:06 → UTC 21:06"
+echo "   JST 07:07 → UTC 22:07"
+echo "   JST 08:10 → UTC 23:10"
 echo ""
-echo "2. Spesifik tarih ile (9 Ocak 2026 UTC 15:28):"
-echo "   grep -E '2026-01-09.*15:28' logs/app.log -B 50 -A 200 | less"
+echo "💡 Manuel arama komutları:"
 echo ""
-echo "3. Sadece hata mesajları:"
-echo "   grep -E '15:28:[0-9]{2}' logs/app.log -A 200 | grep -E '(ERROR|error|FAILED|failed|Exception|❌|⚠️)' --color=always"
+echo "1. JST 00:29 (UTC 15:29) için:"
+echo "   grep -E '15:29:[0-9]{2}' logs/app.log -B 30 -A 200 | grep -E '(Webhook|TRAILING|ENTRY|ERROR|Position)' --color=always | less"
 echo ""
-echo "4. Webhook ve alert mesajları:"
-echo "   grep -E '15:28:[0-9]{2}' logs/app.log -B 30 -A 100 | grep -E '(Webhook received|webhook|alert|TRAILING)' --color=always"
+echo "2. JST 02:52 (UTC 17:52) için:"
+echo "   grep -E '17:52:[0-9]{2}' logs/app.log -B 30 -A 200 | grep -E '(Webhook|TRAILING|ENTRY|ERROR|Position)' --color=always | less"
 echo ""
+echo "3. JST 06:06 (UTC 21:06) için:"
+echo "   grep -E '21:06:[0-9]{2}' logs/app.log -B 30 -A 200 | grep -E '(Webhook|TRAILING|ENTRY|ERROR|Position)' --color=always | less"
+echo ""
+echo "4. JST 07:07 (UTC 22:07) için:"
+echo "   grep -E '22:07:[0-9]{2}' logs/app.log -B 30 -A 200 | grep -E '(Webhook|TRAILING|ENTRY|ERROR|Position)' --color=always | less"
+echo ""
+echo "5. JST 08:10 (UTC 23:10) için:"
+echo "   grep -E '23:10:[0-9]{2}' logs/app.log -B 30 -A 200 | grep -E '(Webhook|TRAILING|ENTRY|ERROR|Position)' --color=always | less"
+echo ""
+echo "6. Tüm saatler için webhook mesajları:"
+echo "   grep -E '(15:29|17:52|21:06|22:07|23:10):[0-9]{2}' logs/app.log | grep -E 'Webhook received' --color=always"
+echo ""
+echo "7. Tüm saatler için hata mesajları:"
+echo "   grep -E '(15:29|17:52|21:06|22:07|23:10):[0-9]{2}' logs/app.log -A 100 | grep -E '(ERROR|error|FAILED|failed|Exception|❌)' --color=always"
+echo ""
+echo "=========================================="
+echo "ANALİZ TAMAMLANDI"
 echo "=========================================="
 

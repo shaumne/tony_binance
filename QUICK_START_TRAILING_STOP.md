@@ -288,3 +288,4 @@ Trailing stop kullanmadan önce:
 **Tamamsa → Fire and Forget!** 🚀🔥
 
 
+
