@@ -653,7 +653,7 @@ class BinanceHandler:
             return []
     
     def monitor_positions(self):
-        """Monitor positions continuously"""
+        """Monitor positions continuously and cleanup orphaned trailing stops"""
         while True:
             try:
                 current_positions = self.get_open_positions()
@@ -662,6 +662,9 @@ class BinanceHandler:
                 for pos in current_positions:
                     pos_id = f"{pos['symbol']}_{pos['positionSide']}"
                     self.last_position_states[pos_id] = pos
+                
+                # Cleanup orphaned trailing stops (position closed but trailing stop still open)
+                self.cleanup_orphaned_trailing_stops()
                 
                 time.sleep(5)  # Check every 5 seconds
                 
@@ -1158,6 +1161,15 @@ class BinanceHandler:
                         logger.info(f"   Algo ID: {trailing_stop_id}")
                         logger.info(f"   Algo Type: {algo_type}")
                         logger.info(f"   Algo Status: {algo_status}")
+                        
+                        # Track trailing stop for cleanup when position closes
+                        tracking_key = f"{formatted_symbol}_{position_side}"
+                        if not hasattr(self, 'trailing_stop_tracking'):
+                            self.trailing_stop_tracking = {}
+                        if tracking_key not in self.trailing_stop_tracking:
+                            self.trailing_stop_tracking[tracking_key] = []
+                        self.trailing_stop_tracking[tracking_key].append(trailing_stop_id)
+                        logger.info(f"📝 Trailing stop tracked for cleanup: {tracking_key}")
                     
                     trailing_stop_success = True
                     break
@@ -1348,3 +1360,98 @@ class BinanceHandler:
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             return {"success": False, "error": f"Trailing stop strategy failed: {str(e)}"}
+    
+    def cleanup_orphaned_trailing_stops(self):
+        """
+        Cleanup trailing stop orders that have no matching position
+        Called periodically to ensure orphaned trailing stops are cancelled
+        """
+        try:
+            # Get current positions
+            current_positions = self.get_open_positions()
+            active_position_keys = set()
+            
+            for pos in current_positions:
+                symbol = pos['symbol']
+                pos_side = pos.get('positionSide', 'BOTH')
+                actual_amt = float(pos.get('positionAmt', '0'))
+                
+                if abs(actual_amt) > 0:
+                    # Create tracking key
+                    if pos_side == 'BOTH':
+                        # One-way mode: determine direction from amount
+                        if actual_amt > 0:
+                            active_position_keys.add(f"{symbol}_LONG")
+                        elif actual_amt < 0:
+                            active_position_keys.add(f"{symbol}_SHORT")
+                    else:
+                        active_position_keys.add(f"{symbol}_{pos_side}")
+            
+            # Get all open algo orders (trailing stops)
+            try:
+                if hasattr(self.client, 'futures_get_open_algo_orders'):
+                    algo_orders = self.client.futures_get_open_algo_orders()
+                else:
+                    algo_orders = []
+                    # Fallback: get per symbol
+                    symbols = set([pos['symbol'] for pos in current_positions])
+                    common_symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'LDOUSDT', 'XLMUSDT', 'ADAUSDT', 
+                                     'DOTUSDT', 'UNIUSDT', 'DOGEUSDT', 'FETUSDT', 'INJUSDT', 'IMXUSDT', 'ARBUSDT']
+                    symbols.update(common_symbols)
+                    for symbol in symbols:
+                        try:
+                            if hasattr(self.client, 'futures_get_all_algo_orders'):
+                                symbol_algos = self.client.futures_get_all_algo_orders(symbol=symbol)
+                                algo_orders.extend([a for a in symbol_algos if a.get('algoStatus') == 'NEW' and a.get('orderType') == 'TRAILING_STOP_MARKET'])
+                        except:
+                            continue
+                
+                # Check each trailing stop
+                cancelled_count = 0
+                for algo in algo_orders:
+                    if algo.get('orderType') != 'TRAILING_STOP_MARKET':
+                        continue
+                    
+                    symbol = algo.get('symbol')
+                    algo_pos_side = algo.get('positionSide', 'BOTH')
+                    algo_id = algo.get('algoId')
+                    
+                    # Create tracking key
+                    tracking_key = f"{symbol}_{algo_pos_side}"
+                    
+                    # Check if position exists
+                    position_exists = False
+                    if tracking_key in active_position_keys:
+                        position_exists = True
+                    elif algo_pos_side == 'BOTH':
+                        # Check both LONG and SHORT
+                        if f"{symbol}_LONG" in active_position_keys or f"{symbol}_SHORT" in active_position_keys:
+                            position_exists = True
+                    else:
+                        # Check BOTH position
+                        if f"{symbol}_BOTH" in active_position_keys:
+                            position_exists = True
+                    
+                    if not position_exists:
+                        # Orphaned trailing stop - cancel it
+                        try:
+                            if hasattr(self.client, 'futures_cancel_algo_order'):
+                                self.client.futures_cancel_algo_order(symbol=symbol, algoId=algo_id)
+                                logger.info(f"🧹 Cleaned up orphaned trailing stop: {symbol} {algo_pos_side} (Algo ID: {algo_id})")
+                                cancelled_count += 1
+                                
+                                # Remove from tracking
+                                if hasattr(self, 'trailing_stop_tracking') and tracking_key in self.trailing_stop_tracking:
+                                    if algo_id in self.trailing_stop_tracking[tracking_key]:
+                                        self.trailing_stop_tracking[tracking_key].remove(algo_id)
+                        except Exception as e:
+                            logger.warning(f"⚠️ Failed to cancel orphaned trailing stop {algo_id}: {str(e)}")
+                
+                if cancelled_count > 0:
+                    logger.info(f"✅ Cleaned up {cancelled_count} orphaned trailing stop(s)")
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Error cleaning up orphaned trailing stops: {str(e)}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error in cleanup_orphaned_trailing_stops: {str(e)}")

@@ -18,7 +18,7 @@ class PositionValidator:
     
     def __init__(self):
         self.recent_orders = {}  # Track recent orders to prevent duplicates
-        self.order_cooldown = 5  # Seconds between same orders
+        self.order_cooldown = 30  # Seconds between same orders (increased to catch all duplicates)
         self.position_locks = {}  # Symbol-based locks for concurrent protection
         
     def validate_position_request(self, symbol: str, direction: str, action: str,

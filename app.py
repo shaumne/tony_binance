@@ -540,6 +540,43 @@ def webhook():
                 symbol_lock = get_symbol_lock(data['symbol'])
                 
                 with symbol_lock:
+                    # CRITICAL: Quick position check BEFORE processing (catch duplicates immediately)
+                    # This prevents duplicate trailing stops even if signals arrive simultaneously
+                    try:
+                        current_positions = binance_handler.get_open_positions()
+                        symbol_upper = data['symbol'].upper().replace('.P', '')
+                        side_upper = data.get('side', '').upper()
+                        direction = 'long' if side_upper == 'BUY' else 'short'
+                        position_side = 'LONG' if direction == 'long' else 'SHORT'
+                        
+                        # Check for existing position in same direction
+                        for pos in current_positions:
+                            if pos['symbol'] == symbol_upper:
+                                pos_side = pos.get('positionSide', 'BOTH')
+                                pos_size = abs(float(pos.get('positionAmt', '0')))
+                                
+                                if pos_size > 0:
+                                    actual_pos_amt = float(pos.get('positionAmt', '0'))
+                                    is_long = actual_pos_amt > 0
+                                    is_short = actual_pos_amt < 0
+                                    
+                                    is_same_direction = False
+                                    if pos_side == 'BOTH':
+                                        if (direction == 'long' and is_long) or (direction == 'short' and is_short):
+                                            is_same_direction = True
+                                    elif pos_side == position_side:
+                                        is_same_direction = True
+                                    
+                                    if is_same_direction:
+                                        logger.warning(f"🚫 DUPLICATE SIGNAL BLOCKED: {symbol_upper} {position_side} position already exists (Size: {pos_size})")
+                                        return jsonify({
+                                            "status": "error",
+                                            "message": f"Already have {position_side} position for {symbol_upper}. Duplicate signal ignored.",
+                                            "reason": "duplicate_position"
+                                        }), 200
+                    except Exception as e:
+                        logger.warning(f"⚠️ Error in quick position check: {str(e)}, continuing...")
+                    
                     result = binance_handler.place_trailing_stop_strategy(data)
                 
                 if result and result.get('success'):
