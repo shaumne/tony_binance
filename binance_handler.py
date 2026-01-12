@@ -79,6 +79,10 @@ class BinanceHandler:
             # Get exchange info for the symbol
             exchange_info = self.client.futures_exchange_info()
             
+            min_qty = None
+            step_size = None
+            precision = 3  # Default precision
+            
             # Find the symbol in exchange info
             for s in exchange_info['symbols']:
                 if s['symbol'] == symbol.upper():
@@ -86,6 +90,7 @@ class BinanceHandler:
                     for filt in s['filters']:
                         if filt['filterType'] == 'LOT_SIZE':
                             step_size = float(filt['stepSize'])
+                            min_qty = float(filt.get('minQty', 0))
                             
                             # Calculate precision from stepSize
                             # e.g., stepSize=0.001 -> precision=3
@@ -97,19 +102,44 @@ class BinanceHandler:
                             # Format to precision
                             rounded_qty = round(rounded_qty, precision)
                             
-                            logger.info(f"📐 Quantity precision: stepSize={step_size}, precision={precision}")
-                            logger.info(f"   Raw quantity: {quantity}, Rounded: {rounded_qty}")
+                            logger.info(f"📐 Quantity precision: stepSize={step_size}, precision={precision}, minQty={min_qty}")
+                            logger.info(f"   Raw quantity: {quantity:.8f}, Rounded: {rounded_qty:.8f}")
+                            
+                            # Validate minimum quantity
+                            if min_qty and rounded_qty < min_qty:
+                                logger.error(f"❌ Quantity {rounded_qty:.8f} is below minimum {min_qty:.8f} for {symbol}")
+                                raise ValueError(f"Quantity {rounded_qty:.8f} is below minimum {min_qty:.8f} for {symbol}")
+                            
+                            # Validate that quantity is not zero or negative
+                            if rounded_qty <= 0:
+                                logger.error(f"❌ Quantity {rounded_qty:.8f} is zero or negative after formatting")
+                                raise ValueError(f"Quantity {rounded_qty:.8f} is zero or negative after formatting")
                             
                             return rounded_qty
             
             # Fallback: round to 3 decimal places
             logger.warning(f"⚠️ Could not find LOT_SIZE filter for {symbol}, using default precision (3)")
-            return round(quantity, 3)
+            rounded_qty = round(quantity, 3)
             
+            if rounded_qty <= 0:
+                logger.error(f"❌ Quantity {rounded_qty:.8f} is zero or negative after formatting")
+                raise ValueError(f"Quantity {rounded_qty:.8f} is zero or negative after formatting")
+            
+            return rounded_qty
+            
+        except ValueError:
+            # Re-raise ValueError (quantity validation errors)
+            raise
         except Exception as e:
             logger.warning(f"⚠️ Error getting exchange info for {symbol}: {str(e)}, using default precision (3)")
             # Fallback: round to 3 decimal places
-            return round(quantity, 3)
+            rounded_qty = round(quantity, 3)
+            
+            if rounded_qty <= 0:
+                logger.error(f"❌ Quantity {rounded_qty:.8f} is zero or negative after formatting")
+                raise ValueError(f"Quantity {rounded_qty:.8f} is zero or negative after formatting")
+            
+            return rounded_qty
     
     def _get_margin_asset(self, symbol: str) -> str:
         """
@@ -446,35 +476,58 @@ class BinanceHandler:
                         if is_valid:
                             # Place TP order
                             tp_side = 'SELL' if direction == 'long' else 'BUY'
-                            tp_order = self.client.futures_create_order(
-                                symbol=formatted_symbol,
-                                side=tp_side,
-                                positionSide=position_side,
-                                type='TAKE_PROFIT_MARKET',
-                                stopPrice=tp_price,
-                                closePosition=True
-                            )
-                            logger.info(f"✅ TP order placed: ${tp_price:.2f}")
+                            tp_order_success = False
+                            sl_order_success = False
                             
-                            # Place SL order
-                            sl_order = self.client.futures_create_order(
-                                symbol=formatted_symbol,
-                                side=tp_side,
-                                positionSide=position_side,
-                                type='STOP_MARKET',
-                                stopPrice=sl_price,
-                                closePosition=True
-                            )
-                            logger.info(f"✅ SL order placed: ${sl_price:.2f}")
+                            # Place TP order with individual error handling
+                            try:
+                                tp_order = self.client.futures_create_order(
+                                    symbol=formatted_symbol,
+                                    side=tp_side,
+                                    positionSide=position_side,
+                                    type='TAKE_PROFIT_MARKET',
+                                    stopPrice=tp_price,
+                                    closePosition=True
+                                )
+                                tp_order_success = True
+                                logger.info(f"✅ TP order placed: ${tp_price:.2f} (Order ID: {tp_order.get('orderId', 'N/A')})")
+                            except Exception as tp_error:
+                                logger.error(f"❌ Failed to place TP order: {str(tp_error)}")
                             
-                            # Send notification
-                            self._send_enhanced_notification(
-                                symbol, side, current_price, quantity, 
-                                order_result['orderId'],
-                                {'tp_price': tp_price, 'sl_price': sl_price, 'direction': direction}
-                            )
+                            # Place SL order with individual error handling
+                            try:
+                                sl_order = self.client.futures_create_order(
+                                    symbol=formatted_symbol,
+                                    side=tp_side,
+                                    positionSide=position_side,
+                                    type='STOP_MARKET',
+                                    stopPrice=sl_price,
+                                    closePosition=True
+                                )
+                                sl_order_success = True
+                                logger.info(f"✅ SL order placed: ${sl_price:.2f} (Order ID: {sl_order.get('orderId', 'N/A')})")
+                            except Exception as sl_error:
+                                logger.error(f"❌ Failed to place SL order: {str(sl_error)}")
+                                logger.warning(f"⚠️  WARNING: Entry order placed but SL order failed! Position is unprotected!")
+                            
+                            # Send notification only if at least one order succeeded
+                            if tp_order_success or sl_order_success:
+                                self._send_enhanced_notification(
+                                    symbol, side, current_price, quantity, 
+                                    order_result['orderId'],
+                                    {'tp_price': tp_price, 'sl_price': sl_price, 'direction': direction,
+                                     'tp_success': tp_order_success, 'sl_success': sl_order_success}
+                                )
+                            
+                            # Warn if SL failed
+                            if not sl_order_success:
+                                logger.warning(f"⚠️  CRITICAL: SL order failed for {formatted_symbol} {position_side} position!")
+                                logger.warning(f"   Entry order ID: {order_result.get('orderId', 'N/A')}")
+                                logger.warning(f"   Please manually place a stop loss order!")
                 except Exception as tp_sl_error:
-                    logger.error(f"❌ Error placing TP/SL: {str(tp_sl_error)}")
+                    logger.error(f"❌ Error in TP/SL placement process: {str(tp_sl_error)}")
+                    import traceback
+                    logger.error(f"Traceback: {traceback.format_exc()}")
             
             return order_result
             
@@ -757,6 +810,7 @@ class BinanceHandler:
             
             formatted_symbol = self._format_symbol(symbol)
             direction = 'long' if side == 'BUY' else 'short'
+            position_side = 'LONG' if direction == 'long' else 'SHORT'
             
             logger.info(f"📋 Parsed Parameters:")
             logger.info(f"   Symbol: {formatted_symbol}")
@@ -775,7 +829,18 @@ class BinanceHandler:
             self.set_margin_type(formatted_symbol, 'CROSSED')
             
             # ====================================================================
-            # STEP 3: CALCULATE QUANTITY
+            # STEP 3: CHECK EXISTING POSITIONS
+            # ====================================================================
+            current_positions = self.get_open_positions()
+            existing_position = None
+            for pos in current_positions:
+                if pos['symbol'] == formatted_symbol and pos['positionSide'] == position_side:
+                    existing_position = pos
+                    logger.warning(f"⚠️ Existing {position_side} position found for {formatted_symbol}: {abs(float(pos.get('positionAmt', 0)))}")
+                    break
+            
+            # ====================================================================
+            # STEP 4: CALCULATE QUANTITY
             # ====================================================================
             margin_asset = self._get_margin_asset(formatted_symbol)
             available_balance, total_balance, unrealized_pnl = self.get_account_balance(margin_asset)
@@ -804,21 +869,34 @@ class BinanceHandler:
                     quantity = leveraged_amount / current_price
             
             logger.info(f"📊 Quantity Calculation:")
-            logger.info(f"   Balance: ${available_balance:.2f}")
+            logger.info(f"   Balance: ${available_balance:.2f} {margin_asset}")
             logger.info(f"   Quantity Input: {quantity_str}")
-            logger.info(f"   Calculated Quantity: {quantity:.6f}")
+            logger.info(f"   Current Price: ${current_price:.2f}")
+            logger.info(f"   Leverage: {coin_config['leverage']}x")
+            logger.info(f"   Calculated Quantity: {quantity:.8f}")
+            
+            # Validate quantity before formatting
+            if quantity <= 0:
+                error_msg = f"Calculated quantity is zero or negative: {quantity:.8f}. Balance: ${available_balance:.2f}, Price: ${current_price:.2f}"
+                logger.error(f"❌ {error_msg}")
+                return {"success": False, "error": error_msg}
             
             # ====================================================================
-            # STEP 4: PLACE ENTRY ORDER (MARKET)
+            # STEP 5: PLACE ENTRY ORDER (MARKET)
             # ====================================================================
             logger.info("=" * 80)
-            logger.info("📤 STEP 4: PLACING ENTRY ORDER (MARKET)")
+            logger.info("📤 STEP 5: PLACING ENTRY ORDER (MARKET)")
             logger.info("=" * 80)
-            
-            position_side = 'LONG' if direction == 'long' else 'SHORT'
             
             # Format quantity according to Binance precision requirements
-            quantity = self._format_quantity(formatted_symbol, quantity)
+            try:
+                quantity = self._format_quantity(formatted_symbol, quantity)
+                logger.info(f"✅ Formatted quantity: {quantity:.8f}")
+            except ValueError as ve:
+                error_msg = f"Quantity formatting failed: {str(ve)}. Calculated quantity was too small."
+                logger.error(f"❌ {error_msg}")
+                logger.error(f"   Balance: ${available_balance:.2f}, Quantity Input: {quantity_str}, Calculated: {quantity:.8f}")
+                return {"success": False, "error": error_msg}
             
             try:
                 entry_order = self.client.futures_create_order(
@@ -857,7 +935,7 @@ class BinanceHandler:
                 return {"success": False, "error": f"Entry order failed: {str(e)}"}
             
             # ====================================================================
-            # STEP 5: CALCULATE AUTO-PRICES (if needed)
+            # STEP 6: CALCULATE AUTO-PRICES (if needed)
             # ====================================================================
             if activation_price is None:
                 if direction == 'long':
@@ -886,7 +964,7 @@ class BinanceHandler:
                 activation_price = self.tp_sl_manager._round_to_price_step(formatted_symbol, activation_price)
             
             # ====================================================================
-            # STEP 6: PLACE TRAILING STOP ORDER (with retry)
+            # STEP 7: PLACE TRAILING STOP ORDER (with retry)
             # ====================================================================
             logger.info("=" * 80)
             logger.info("📤 STEP 6: PLACING TRAILING STOP ORDER")
@@ -950,7 +1028,7 @@ class BinanceHandler:
                         trailing_stop_success = False
             
             # ====================================================================
-            # STEP 7: FALLBACK - PLACE HARD STOP LOSS (if trailing stop failed)
+            # STEP 8: FALLBACK - PLACE HARD STOP LOSS (if trailing stop failed)
             # ====================================================================
             if not trailing_stop_success:
                 logger.info("=" * 80)
@@ -991,7 +1069,7 @@ class BinanceHandler:
                     }
             
             # ====================================================================
-            # STEP 8: SUCCESS RETURN
+            # STEP 9: SUCCESS RETURN
             # ====================================================================
             logger.info("=" * 80)
             logger.info("✅ TRAILING STOP STRATEGY - SUCCESS")

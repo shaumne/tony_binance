@@ -514,8 +514,13 @@ def webhook():
             if 'trailType' not in data and 'type' in data:
                 data['trailType'] = data['type']
             
+            # Add workingType if missing (default to MARK_PRICE)
+            if 'workingType' not in data:
+                data['workingType'] = 'MARK_PRICE'
+                logger.info(f"⚠️ workingType not provided, defaulting to MARK_PRICE")
+            
             # Validate required fields (activationPrice is optional - auto-calculated if not provided)
-            required_fields = ['symbol', 'side', 'action', 'callbackRate', 'workingType']
+            required_fields = ['symbol', 'side', 'action', 'callbackRate']
             missing_fields = [field for field in required_fields if field not in data]
             
             if missing_fields:
