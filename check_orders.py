@@ -121,11 +121,55 @@ def check_orders():
         return
     
     try:
-        # Get all open orders
+        # Get all open orders (regular orders)
         print("📥 Açık emirler çekiliyor...")
         open_orders = client.futures_get_open_orders()
         
-        print(f"✅ {len(open_orders)} açık emir bulundu")
+        # Get algo orders (trailing stop orders are algo orders)
+        print("Algo emirler (Trailing Stop) cekiliyor...")
+        try:
+            # Try to get algo orders - method might not exist in older python-binance versions
+            if hasattr(client, 'futures_get_open_algo_orders'):
+                algo_orders = client.futures_get_open_algo_orders()
+            else:
+                # Fallback: Use futures_get_all_algo_orders with symbol filter
+                # Get algo orders for common symbols
+                algo_orders = []
+                symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'LDOUSDT', 'XLMUSDT', 'ADAUSDT', 'DOTUSDT', 'UNIUSDT', 'DOGEUSDT', 'FETUSDT', 'INJUSDT', 'IMXUSDT', 'ARBUSDT']
+                for symbol in symbols:
+                    try:
+                        if hasattr(client, 'futures_get_all_algo_orders'):
+                            symbol_algos = client.futures_get_all_algo_orders(symbol=symbol)
+                            # Filter for open algo orders (status NEW)
+                            algo_orders.extend([a for a in symbol_algos if a.get('algoStatus') == 'NEW'])
+                    except:
+                        continue
+            
+            # Convert algo orders to same format for processing
+            for algo_order in algo_orders:
+                if algo_order.get('orderType') == 'TRAILING_STOP_MARKET':
+                    # Convert algo order to order-like format
+                    order_like = {
+                        'symbol': algo_order.get('symbol'),
+                        'side': algo_order.get('side'),
+                        'type': algo_order.get('orderType'),
+                        'status': algo_order.get('algoStatus'),
+                        'orderId': algo_order.get('algoId'),  # Use algoId as orderId
+                        'callbackRate': algo_order.get('callbackRate'),
+                        'activationPrice': algo_order.get('activatePrice'),
+                        'workingType': algo_order.get('workingType'),
+                        'positionSide': algo_order.get('positionSide', 'BOTH'),
+                        'closePosition': algo_order.get('closePosition', False),
+                        'time': algo_order.get('createTime', 0),
+                        'origQty': algo_order.get('quantity', '0')
+                    }
+                    open_orders.append(order_like)
+        except Exception as e:
+            print(f"[WARNING] Algo orders alinamadi: {str(e)}")
+            import traceback
+            traceback.print_exc()
+        
+        print(f"✅ {len(open_orders)} açık emir bulundu (normal + algo)")
         print()
         
         if not open_orders:

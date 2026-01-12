@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Test Script for Trailing Stop Strategy
-Tests both standard and trailing stop webhook payloads
+Test Script for Trailing Stop Strategy - Real TradingView Signal Simulation
+Her test gerçek bir TradingView alert'i gibi davranır.
 
-Updated to include validation tests for:
-- callbackRate limits (0.1% - 5.0%)
-- Type safety (string to float conversion)
-- Entry fill verification
-- Position verification
-- Error handling improvements
+Gerçek TradingView sinyal formatı:
+{
+    "symbol": "BTCUSDT.P",           # .P extension otomatik temizlenir
+    "side": "SELL",                   # BUY (LONG) veya SELL (SHORT)
+    "action": "open",
+    "takeProfit": 89747.31,          # Opsiyonel - TP fiyatı
+    "stopLoss": 91320.29,             # Opsiyonel - SL fiyatı (fallback hard stop)
+    "trailType": "TRAILING_STOP_MARKET",
+    "activationPrice": 90462.30,      # Opsiyonel - otomatik hesaplanabilir
+    "callbackRate": 0.6303060804,     # Zorunlu - trailing yüzdesi (0.1-5.0%)
+    "workingType": "MARK_PRICE"       # Opsiyonel - default: MARK_PRICE
+}
+
+NOT: quantity alanı YOK - settings'den order_size_percentage kullanılır
 """
 
 import requests
@@ -24,137 +32,162 @@ logger = logging.getLogger(__name__)
 WEBHOOK_URL = "http://localhost:5001/webhook"
 
 # ============================================================================
-# TEST PAYLOADS
+# GERÇEK TRADINGVIEW SİNYAL FORMATI - TEST PAYLOADS
 # ============================================================================
 
-# Test 1: Standard Strategy (Old Logic)
+# Referans: Gerçek TradingView sinyali (kullanıcıdan alınan)
+# {
+#     "symbol": "BTCUSDT.P",
+#     "side": "SELL",
+#     "action": "open",
+#     "takeProfit": 89747.3139075959,
+#     "stopLoss": 91320.2920528024,
+#     "trailType": "TRAILING_STOP_MARKET",
+#     "activationPrice": 90462.3039735988,
+#     "callbackRate": 0.6303060804,
+#     "workingType": "MARK_PRICE"
+# }
+
+# Test 1: Standard Strategy (Old Logic) - Legacy
 standard_payload = {
     "signal": "BTCUSDT/long/open",
     "message": "BTCUSDT/long/open"
 }
 
-# Test 2: Trailing Stop Strategy (New Logic) - BUY (LONG) - Valid
-# activationPrice ve stopLoss OPSIYONEL - otomatik hesaplanacak!
-# activationPrice = entry * 1.02 (LONG için %2 üstte)
-# stopLoss = entry * 0.97 (LONG için %3 altta)
+# Test 2: Gerçek TradingView Sinyali - LONG (LDOUSDT)
+# Gerçek sinyal formatında, quantity YOK - settings'den alınacak
 trailing_stop_long_payload = {
-    "symbol": "LDOUSDT",
-    "side": "BUY",
+    "symbol": "LDOUSDT.P",           # .P extension var (temizlenecek)
+    "side": "BUY",                    # LONG pozisyon
     "action": "open",
-    "quantity": "10%",            # Küçük pozisyon test için
+    "takeProfit": 0.65,               # TP fiyatı (opsiyonel)
+    "stopLoss": 0.60,                 # SL fiyatı (fallback hard stop)
     "trailType": "TRAILING_STOP_MARKET",
-    "callbackRate": 1.5,          # %1.5 trailing (valid: within 0.1-5.0%)
+    "activationPrice": 0.63,          # Activation price (opsiyonel)
+    "callbackRate": 1.5,              # %1.5 trailing (valid: 0.1-5.0%)
     "workingType": "MARK_PRICE"
-    # activationPrice: Otomatik (entry'nin %2 üstünde)
-    # stopLoss: Otomatik (entry'nin %3 altında)
 }
 
-# Test 3: Trailing Stop Strategy - BUY (LONG) - With Explicit Prices
-# Tam payload ile activationPrice ve stopLoss belirtilmiş (0.0 = auto-calculate)
-# Note: 0.0 veya null değerler otomatik hesaplanacak
+# Test 3: Gerçek TradingView Sinyali - LONG (ADAUSDT) - Full Payload
 trailing_stop_full_payload = {
-    "symbol": "ADAUSDT",
+    "symbol": "ADAUSDT.P",
     "side": "BUY",
     "action": "open",
-    "quantity": "10%",
+    "takeProfit": 0.40,
+    "stopLoss": 0.37,
     "trailType": "TRAILING_STOP_MARKET",
-    "callbackRate": 2.0,          # %2.0 trailing (valid)
-    "activationPrice": None,      # Will be calculated from entry (auto: entry * 1.02)
-    "workingType": "MARK_PRICE",
-    "stopLoss": None              # Will be calculated from entry (auto: entry * 0.97)
+    "activationPrice": 0.39,
+    "callbackRate": 2.0,              # %2.0 trailing
+    "workingType": "MARK_PRICE"
 }
 
-# Test 4: Trailing Stop Strategy - SELL (SHORT) - Valid
+# Test 4: Gerçek TradingView Sinyali - SHORT (XLMUSDT)
 trailing_stop_short_payload = {
-    "symbol": "XLMUSDT",
-    "side": "SELL",
+    "symbol": "XLMUSDT.P",
+    "side": "SELL",                   # SHORT pozisyon
     "action": "open",
-    "quantity": "10%",
+    "takeProfit": 0.215,
+    "stopLoss": 0.222,
     "trailType": "TRAILING_STOP_MARKET",
-    "callbackRate": 1.5,          # %1.5 trailing (valid)
+    "activationPrice": 0.218,
+    "callbackRate": 1.5,
     "workingType": "MARK_PRICE"
 }
 
-# Test 5: callbackRate String Format (Should Work - Auto Convert)
+# Test 5: callbackRate String Format (Gerçek sinyal - String olarak gelebilir)
 trailing_stop_callback_string_payload = {
-    "symbol": "DOTUSDT",
+    "symbol": "DOTUSDT.P",
     "side": "BUY",
     "action": "open",
-    "quantity": "10%",
+    "takeProfit": 2.10,
+    "stopLoss": 1.98,
     "trailType": "TRAILING_STOP_MARKET",
-    "callbackRate": "1.5",        # String format (should convert to float)
+    "activationPrice": 2.05,
+    "callbackRate": "1.5",            # String format (should convert to float)
     "workingType": "MARK_PRICE"
 }
 
-# Test 6: callbackRate with Percentage Sign (Should Work - Auto Strip)
+# Test 6: callbackRate with Percentage Sign (Gerçek sinyal - % işareti ile gelebilir)
 trailing_stop_callback_percent_payload = {
-    "symbol": "UNIUSDT",
+    "symbol": "UNIUSDT.P",
     "side": "BUY",
     "action": "open",
-    "quantity": "10%",
+    "takeProfit": 5.50,
+    "stopLoss": 5.20,
     "trailType": "TRAILING_STOP_MARKET",
-    "callbackRate": "1.5%",       # String with % (should strip and convert)
+    "activationPrice": 5.40,
+    "callbackRate": "1.5%",           # String with % (should strip and convert)
     "workingType": "MARK_PRICE"
 }
 
-# Test 7: callbackRate Too Low (< 0.1%) - Should Fail
+# Test 7: callbackRate Too Low (< 0.1%) - Should Fail Validation
 trailing_stop_callback_too_low = {
-    "symbol": "IMXUSDT",
+    "symbol": "IMXUSDT.P",
     "side": "BUY",
     "action": "open",
-    "quantity": "10%",
+    "takeProfit": 0.28,
+    "stopLoss": 0.26,
     "trailType": "TRAILING_STOP_MARKET",
-    "callbackRate": 0.05,         # Too low (< 0.1%) - should fail validation
+    "activationPrice": 0.27,
+    "callbackRate": 0.05,             # Too low (< 0.1%) - should fail validation
     "workingType": "MARK_PRICE"
 }
 
-# Test 8: callbackRate Too High (> 5.0%) - Should Fail
+# Test 8: callbackRate Too High (> 5.0%) - Should Fail Validation
 trailing_stop_callback_too_high = {
-    "symbol": "ARBUSDT",
+    "symbol": "ARBUSDT.P",
     "side": "BUY",
     "action": "open",
-    "quantity": "10%",
+    "takeProfit": 1.20,
+    "stopLoss": 1.10,
     "trailType": "TRAILING_STOP_MARKET",
-    "callbackRate": 6.0,          # Too high (> 5.0%) - should fail validation
+    "activationPrice": 1.15,
+    "callbackRate": 6.0,              # Too high (> 5.0%) - should fail validation
     "workingType": "MARK_PRICE"
 }
 
 # Test 9: callbackRate at Lower Limit (0.1%) - Should Pass
 trailing_stop_callback_min = {
-    "symbol": "INJUSDT",
+    "symbol": "INJUSDT.P",
     "side": "BUY",
     "action": "open",
-    "quantity": "10%",
+    "takeProfit": 5.50,
+    "stopLoss": 5.00,
     "trailType": "TRAILING_STOP_MARKET",
-    "callbackRate": 0.1,          # Minimum valid (0.1%) - should pass
+    "activationPrice": 5.25,
+    "callbackRate": 0.1,              # Minimum valid (0.1%) - should pass
     "workingType": "MARK_PRICE"
 }
 
 # Test 10: callbackRate at Upper Limit (5.0%) - Should Pass
 trailing_stop_callback_max = {
-    "symbol": "SOLUSDT",
+    "symbol": "SOLUSDT.P",
     "side": "BUY",
     "action": "open",
-    "quantity": "10%",
+    "takeProfit": 145.0,
+    "stopLoss": 135.0,
     "trailType": "TRAILING_STOP_MARKET",
-    "callbackRate": 5.0,          # Maximum valid (5.0%) - should pass
+    "activationPrice": 140.0,
+    "callbackRate": 5.0,              # Maximum valid (5.0%) - should pass
     "workingType": "MARK_PRICE"
 }
 
-# Test 11: Missing callbackRate (Should Fail)
+# Test 11: Missing callbackRate (Should Fail - Required Field)
 invalid_missing_callbackrate = {
-    "symbol": "ETHUSDT",
+    "symbol": "ETHUSDT.P",
     "side": "BUY",
     "action": "open",
-    "quantity": "10%",
+    "takeProfit": 3500.0,
+    "stopLoss": 3400.0,
     "trailType": "TRAILING_STOP_MARKET",
+    "activationPrice": 3450.0,
     "workingType": "MARK_PRICE"
     # Missing: callbackRate (required)
 }
 
-# Test 12: Missing Fields (Should Fail)
+# Test 12: Missing Multiple Fields (Should Fail)
 invalid_missing_fields = {
-    "symbol": "BNBUSDT",
+    "symbol": "BNBUSDT.P",
     "side": "BUY",
     "trailType": "TRAILING_STOP_MARKET"
     # Missing: callbackRate, action, workingType
@@ -162,36 +195,54 @@ invalid_missing_fields = {
 
 # Test 13: Invalid workingType (Should Default to MARK_PRICE)
 trailing_stop_invalid_workingtype = {
-    "symbol": "FETUSDT",
+    "symbol": "FETUSDT.P",
     "side": "BUY",
     "action": "open",
-    "quantity": "10%",
+    "takeProfit": 0.30,
+    "stopLoss": 0.28,
     "trailType": "TRAILING_STOP_MARKET",
+    "activationPrice": 0.29,
     "callbackRate": 1.5,
-    "workingType": "INVALID_TYPE"  # Invalid - should default to MARK_PRICE
+    "workingType": "INVALID_TYPE"     # Invalid - should default to MARK_PRICE
 }
 
 # Test 14: Invalid activationPrice Format (Should Auto-Calculate)
 trailing_stop_invalid_activation = {
-    "symbol": "DOGEUSDT",
+    "symbol": "DOGEUSDT.P",
     "side": "BUY",
     "action": "open",
-    "quantity": "10%",
+    "takeProfit": 0.15,
+    "stopLoss": 0.13,
     "trailType": "TRAILING_STOP_MARKET",
+    "activationPrice": "invalid",     # Invalid format - should auto-calculate
     "callbackRate": 1.5,
-    "activationPrice": "invalid",  # Invalid format - should auto-calculate
     "workingType": "MARK_PRICE"
 }
 
 # Test 15: Invalid stopLoss Format (Should Auto-Calculate)
 trailing_stop_invalid_stoploss = {
-    "symbol": "BTCUSDT",
+    "symbol": "BTCUSDT.P",
     "side": "BUY",
     "action": "open",
-    "quantity": "5%",              # Very small position for BTC
+    "takeProfit": 92000.0,
+    "stopLoss": "invalid",            # Invalid format - should auto-calculate
     "trailType": "TRAILING_STOP_MARKET",
+    "activationPrice": 91000.0,
     "callbackRate": 1.5,
-    "stopLoss": "invalid",         # Invalid format - should auto-calculate
+    "workingType": "MARK_PRICE"
+}
+
+# Test 16: Gerçek TradingView Payload - BTCUSDT.P SHORT (Kullanıcıdan alınan)
+# "BTC Short High-PF Streamlined (Binance Futures TRAILING_STOP payload)"
+trailing_stop_real_btc_short_payload = {
+    "symbol": "BTCUSDT.P",            # .P extension var (temizlenecek)
+    "side": "SELL",                    # SHORT pozisyon
+    "action": "open",
+    "takeProfit": 89747.3139075959,
+    "stopLoss": 91320.2920528024,
+    "trailType": "TRAILING_STOP_MARKET",
+    "activationPrice": 90462.3039735988,
+    "callbackRate": 0.6303060804,     # %0.63 trailing (geçerli: 0.1-5.0 arası)
     "workingType": "MARK_PRICE"
 }
 
@@ -305,40 +356,55 @@ def send_webhook(payload, test_name, expected_status='success'):
         }
 
 def run_all_tests():
-    """Run all test cases organized by category"""
+    """
+    Run all test cases organized by category
+    
+    Her test gerçek bir TradingView alert'i gibi davranır:
+    - .P extension'ları otomatik temizlenir
+    - quantity yok - settings'den order_size_percentage kullanılır
+    - takeProfit ve stopLoss değerleri gerçek sinyallerde olduğu gibi
+    - Her test gerçek bir emir simülasyonu yapar
+    """
     
     logger.info("🚀 STARTING TRAILING STOP STRATEGY TESTS")
     logger.info("=" * 80)
     logger.info("📋 Test Categories:")
-    logger.info("   1. Valid Payload Tests (Should Pass)")
+    logger.info("   1. Valid Payload Tests (Should Pass) - Gerçek TradingView Sinyalleri")
     logger.info("   2. Type Safety Tests (String to Float Conversion)")
     logger.info("   3. Validation Tests (callbackRate Limits)")
     logger.info("   4. Error Handling Tests (Invalid Inputs)")
-    logger.info("   5. Edge Case Tests (Boundary Values)")
+    logger.info("   5. Real TradingView Payloads (From Actual Alerts)")
+    logger.info("   6. Standard Strategy (Old Logic) - Legacy")
+    logger.info("")
+    logger.info("⚠️  UYARI: Her test gerçek bir emir simülasyonu yapar!")
+    logger.info("    - Pozisyon açılır")
+    logger.info("    - Trailing stop yerleştirilir")
+    logger.info("    - Auto switch aktif: Duplicate pozisyonlar oluşmaz")
+    logger.info("      (Aynı sembol için zıt pozisyon varsa otomatik kapatılır)")
     logger.info("=" * 80)
     
     # ========================================================================
     # TEST CATEGORIES
     # ========================================================================
     tests = [
-        # Category 1: Valid Payload Tests (Should Pass)
+        # Category 1: Valid Payload Tests (Should Pass) - Gerçek TradingView Sinyalleri
         {
             "category": "Valid Payloads",
-            "name": "1.1 Trailing Stop - LDO (LONG, Auto Calculate)",
+            "name": "1.1 Gerçek Sinyal - LDOUSDT.P LONG (TradingView Format)",
             "payload": trailing_stop_long_payload,
             "expected_status": "success",
             "enabled": True
         },
         {
             "category": "Valid Payloads",
-            "name": "1.2 Trailing Stop - SHORT Position",
+            "name": "1.2 Gerçek Sinyal - XLMUSDT.P SHORT (TradingView Format)",
             "payload": trailing_stop_short_payload,
             "expected_status": "success",
             "enabled": True
         },
         {
             "category": "Valid Payloads",
-            "name": "1.3 Trailing Stop - Full Payload (All Fields)",
+            "name": "1.3 Gerçek Sinyal - ADAUSDT.P LONG (Full Payload)",
             "payload": trailing_stop_full_payload,
             "expected_status": "success",
             "enabled": True
@@ -427,10 +493,19 @@ def run_all_tests():
             "enabled": True
         },
         
-        # Category 5: Standard Strategy (Old Logic)
+        # Category 5: Real TradingView Payloads (Kullanıcıdan Alınan Gerçek Sinyaller)
+        {
+            "category": "Real TradingView Payloads",
+            "name": "5.1 Gerçek BTCUSDT.P SHORT (Kullanıcıdan Alınan TradingView Alert)",
+            "payload": trailing_stop_real_btc_short_payload,
+            "expected_status": "success",
+            "enabled": True  # Gerçek payload testi - kullanıcıdan alınan sinyal
+        },
+        
+        # Category 6: Standard Strategy (Old Logic)
         {
             "category": "Legacy",
-            "name": "5.1 Standard Strategy (Old Logic)",
+            "name": "6.1 Standard Strategy (Old Logic)",
             "payload": standard_payload,
             "expected_status": "success",
             "enabled": False  # Set to True to test standard strategy

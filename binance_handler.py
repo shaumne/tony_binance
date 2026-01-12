@@ -756,7 +756,7 @@ class BinanceHandler:
             symbol = data.get('symbol', '').upper().strip()
             side = data.get('side', '').upper().strip()
             action = data.get('action', '').lower().strip()
-            quantity_str = data.get('quantity', '10%')
+            quantity_str = data.get('quantity')  # Will be set from coin_config if None
             working_type = data.get('workingType', 'MARK_PRICE').upper()
             
             # Validate required fields
@@ -808,18 +808,20 @@ class BinanceHandler:
                 except (TypeError, ValueError):
                     stop_loss_price = None
             
+            # Parse takeProfit (optional - used in fallback if trailing stop fails)
+            take_profit_raw = data.get('takeProfit')
+            take_profit_price = None
+            if take_profit_raw is not None:
+                try:
+                    take_profit_price = float(take_profit_raw)
+                    if take_profit_price <= 0:
+                        take_profit_price = None
+                except (TypeError, ValueError):
+                    take_profit_price = None
+            
             formatted_symbol = self._format_symbol(symbol)
             direction = 'long' if side == 'BUY' else 'short'
             position_side = 'LONG' if direction == 'long' else 'SHORT'
-            
-            logger.info(f"📋 Parsed Parameters:")
-            logger.info(f"   Symbol: {formatted_symbol}")
-            logger.info(f"   Side: {side} ({direction})")
-            logger.info(f"   Quantity: {quantity_str}")
-            logger.info(f"   Callback Rate: {callback_rate}%")
-            logger.info(f"   Activation Price: {activation_price or 'Auto-calculate'}")
-            logger.info(f"   Stop Loss: {stop_loss_price or 'Auto-calculate'}")
-            logger.info(f"   Working Type: {working_type}")
             
             # ====================================================================
             # STEP 2: SETUP LEVERAGE & MARGIN
@@ -828,16 +830,57 @@ class BinanceHandler:
             self.set_leverage(formatted_symbol, coin_config['leverage'])
             self.set_margin_type(formatted_symbol, 'CROSSED')
             
+            # If quantity not provided, use coin config's order_size_percentage
+            if quantity_str is None or quantity_str == '':
+                order_size_pct = coin_config.get('order_size_percentage', 10.0)
+                quantity_str = f"{order_size_pct}%"
+                logger.info(f"📊 Quantity not provided, using coin config: {quantity_str}")
+            
+            logger.info(f"📋 Parsed Parameters:")
+            logger.info(f"   Symbol: {formatted_symbol}")
+            logger.info(f"   Side: {side} ({direction})")
+            logger.info(f"   Quantity: {quantity_str}")
+            logger.info(f"   Callback Rate: {callback_rate}%")
+            logger.info(f"   Activation Price: {activation_price or 'Auto-calculate'}")
+            logger.info(f"   Stop Loss: {stop_loss_price or 'Auto-calculate'}")
+            logger.info(f"   Take Profit: {take_profit_price or 'Auto-calculate (fallback only)'}")
+            logger.info(f"   Working Type: {working_type}")
+            
             # ====================================================================
-            # STEP 3: CHECK EXISTING POSITIONS
+            # STEP 3: CHECK EXISTING POSITIONS (WITH AUTO SWITCH)
             # ====================================================================
             current_positions = self.get_open_positions()
-            existing_position = None
-            for pos in current_positions:
-                if pos['symbol'] == formatted_symbol and pos['positionSide'] == position_side:
-                    existing_position = pos
-                    logger.warning(f"⚠️ Existing {position_side} position found for {formatted_symbol}: {abs(float(pos.get('positionAmt', 0)))}")
-                    break
+            
+            # Use position validator to check for duplicate/opposite positions
+            auto_switch_enabled = self.config.get('auto_position_switch', True)
+            validation_result = self.position_validator.validate_position_request(
+                formatted_symbol, direction, action, current_positions, auto_switch_enabled
+            )
+            
+            if not validation_result['allowed']:
+                logger.warning(f"❌ Position request REJECTED: {validation_result['reason']}")
+                return {"success": False, "error": validation_result['reason']}
+            
+            # Handle required actions (e.g., close opposite position)
+            if validation_result.get('action_required'):
+                action_type = validation_result['action_required']['type']
+                
+                if action_type == 'close_opposite':
+                    logger.info("🔄 Auto position switch: Closing opposite position...")
+                    positions_to_close = validation_result['action_required']['positions_to_close']
+                    
+                    for pos in positions_to_close:
+                        close_side = f"close_{pos['side']}"
+                        close_result = self.place_order(formatted_symbol, close_side, quantity=pos['size'])
+                        
+                        if not close_result or 'error' in close_result:
+                            logger.error(f"❌ Failed to close opposite position: {close_result.get('error', 'Unknown error')}")
+                            return {"success": False, "error": "Failed to close opposite position"}
+                    
+                    logger.info("✅ Opposite position closed successfully")
+            
+            # Note: position_validator already prevents duplicate same-direction positions
+            # No need for additional check here
             
             # ====================================================================
             # STEP 4: CALCULATE QUANTITY
@@ -863,22 +906,35 @@ class BinanceHandler:
                 try:
                     quantity = float(quantity_str)
                 except (TypeError, ValueError):
-                    # Default to 10% if invalid
-                    order_amount = available_balance * 0.1
+                    # Default to coin config's order_size_percentage if invalid
+                    order_size_pct = coin_config.get('order_size_percentage', 10.0)
+                    order_amount = available_balance * (order_size_pct / 100)
                     leveraged_amount = order_amount * coin_config['leverage']
                     quantity = leveraged_amount / current_price
+                    logger.warning(f"⚠️ Invalid quantity format '{quantity_str}', using coin config: {order_size_pct}%")
             
             logger.info(f"📊 Quantity Calculation:")
             logger.info(f"   Balance: ${available_balance:.2f} {margin_asset}")
             logger.info(f"   Quantity Input: {quantity_str}")
             logger.info(f"   Current Price: ${current_price:.2f}")
             logger.info(f"   Leverage: {coin_config['leverage']}x")
+            logger.info(f"   Order Size %: {coin_config.get('order_size_percentage', 'N/A')}%")
+            
+            # Calculate order amount details for logging
+            if isinstance(quantity_str, str) and quantity_str.endswith('%'):
+                quantity_percentage = float(quantity_str.replace('%', ''))
+                order_amount = available_balance * (quantity_percentage / 100)
+                leveraged_amount = order_amount * coin_config['leverage']
+                logger.info(f"   Order Amount: ${order_amount:.2f} ({quantity_percentage}% of balance)")
+                logger.info(f"   Leveraged Amount: ${leveraged_amount:.2f} ({coin_config['leverage']}x)")
+            
             logger.info(f"   Calculated Quantity: {quantity:.8f}")
             
             # Validate quantity before formatting
             if quantity <= 0:
-                error_msg = f"Calculated quantity is zero or negative: {quantity:.8f}. Balance: ${available_balance:.2f}, Price: ${current_price:.2f}"
+                error_msg = f"Calculated quantity is zero or negative: {quantity:.8f}. Balance: ${available_balance:.2f}, Price: ${current_price:.2f}, Leverage: {coin_config['leverage']}x"
                 logger.error(f"❌ {error_msg}")
+                logger.error(f"   💡 Check: Balance may be too low or leverage too low for this symbol")
                 return {"success": False, "error": error_msg}
             
             # ====================================================================
@@ -898,14 +954,49 @@ class BinanceHandler:
                 logger.error(f"   Balance: ${available_balance:.2f}, Quantity Input: {quantity_str}, Calculated: {quantity:.8f}")
                 return {"success": False, "error": error_msg}
             
+            # Check position mode BEFORE placing entry order
+            is_one_way_mode_entry = True
             try:
-                entry_order = self.client.futures_create_order(
-                    symbol=formatted_symbol,
-                    side=side,
-                    positionSide=position_side,
-                    type='MARKET',
-                    quantity=quantity
-                )
+                # Use futures_get_position_mode() if available, otherwise check positions
+                try:
+                    position_mode = self.client.futures_get_position_mode()
+                    is_one_way_mode_entry = not position_mode.get('dualSidePosition', False)
+                    logger.info(f"📌 Entry Order: Position mode API check - One-way: {is_one_way_mode_entry}")
+                except:
+                    # Fallback: check existing positions
+                    positions = self.client.futures_position_information()
+                    for pos in positions:
+                        if pos.get('symbol') == formatted_symbol:
+                            pos_side = pos.get('positionSide', 'BOTH')
+                            if pos_side != 'BOTH':
+                                is_one_way_mode_entry = False
+                                break
+                    logger.info(f"📌 Entry Order: Position mode from positions - One-way: {is_one_way_mode_entry}")
+            except Exception as e:
+                logger.warning(f"Could not check position mode for entry order: {str(e)}, assuming one-way mode")
+                is_one_way_mode_entry = True
+            
+            try:
+                entry_params = {
+                    'symbol': formatted_symbol,
+                    'side': side,
+                    'type': 'MARKET',
+                    'quantity': quantity
+                }
+                
+                # CRITICAL: positionSide is ONLY required in HEDGE mode
+                # In ONE-WAY mode, positionSide must NOT be included (causes API error)
+                if not is_one_way_mode_entry:
+                    entry_params['positionSide'] = position_side
+                    logger.info(f"📌 Entry Order: Hedge mode - adding positionSide: {position_side}")
+                else:
+                    logger.info(f"📌 Entry Order: One-way mode - NOT adding positionSide")
+                
+                logger.info(f"📋 Entry Order Parameters:")
+                for key, value in entry_params.items():
+                    logger.info(f"   {key}: {value}")
+                
+                entry_order = self.client.futures_create_order(**entry_params)
                 
                 entry_order_id = entry_order.get('orderId')
                 
@@ -959,6 +1050,20 @@ class BinanceHandler:
                 stop_loss_price = self.tp_sl_manager._round_to_price_step(formatted_symbol, stop_loss_price)
                 logger.info(f"🔄 Using provided stop loss: ${stop_loss_price:.2f}")
             
+            # Calculate take profit if not provided (for fallback only)
+            if take_profit_price is None:
+                if direction == 'long':
+                    take_profit_price = entry_price * 1.05  # 5% above entry
+                else:
+                    take_profit_price = entry_price * 0.95  # 5% below entry
+                # Format take profit price precision
+                take_profit_price = self.tp_sl_manager._round_to_price_step(formatted_symbol, take_profit_price)
+                logger.info(f"🔄 Auto-calculated take profit (fallback): ${take_profit_price:.2f}")
+            else:
+                # Format provided take profit price precision
+                take_profit_price = self.tp_sl_manager._round_to_price_step(formatted_symbol, take_profit_price)
+                logger.info(f"🔄 Using provided take profit (fallback): ${take_profit_price:.2f}")
+            
             # Format activation price precision if provided
             if activation_price is not None:
                 activation_price = self.tp_sl_manager._round_to_price_step(formatted_symbol, activation_price)
@@ -967,7 +1072,7 @@ class BinanceHandler:
             # STEP 7: PLACE TRAILING STOP ORDER (with retry)
             # ====================================================================
             logger.info("=" * 80)
-            logger.info("📤 STEP 6: PLACING TRAILING STOP ORDER")
+            logger.info("📤 STEP 7: PLACING TRAILING STOP ORDER")
             logger.info("=" * 80)
             
             trailing_stop_side = 'SELL' if direction == 'long' else 'BUY'
@@ -977,10 +1082,43 @@ class BinanceHandler:
             max_retries = 3
             retry_delays = [0.5, 1.0, 1.5]
             
+            # Check position mode ONCE (before retry loop)
+            # Use the same mode as entry order (already checked above)
+            is_one_way_mode = is_one_way_mode_entry
+            
+            # Wait for position to be established after entry order
+            logger.info("⏳ Waiting for position to be established after entry order...")
+            time.sleep(1.0)  # Give Binance time to process the entry order
+            
+            # Verify position exists and get position size before placing trailing stop
+            position_size = 0.0
+            try:
+                positions = self.client.futures_position_information()
+                position_exists = False
+                for pos in positions:
+                    if pos.get('symbol') == formatted_symbol:
+                        pos_amt = abs(float(pos.get('positionAmt', '0')))
+                        if pos_amt > 0:
+                            position_exists = True
+                            position_size = pos_amt
+                            logger.info(f"✅ Position verified: {formatted_symbol} | Size: {pos_amt} | Side: {pos.get('positionSide', 'BOTH')}")
+                            break
+                
+                if not position_exists:
+                    logger.error(f"❌ CRITICAL: Position not found for {formatted_symbol} after entry order!")
+                    logger.error(f"   This will cause trailing stop order to fail.")
+                    logger.error(f"   Entry order may not have been filled yet.")
+            except Exception as e:
+                logger.error(f"❌ Could not verify position: {str(e)}")
+            
             for attempt in range(max_retries):
                 try:
                     logger.info(f"🔄 Attempt {attempt + 1}/{max_retries}...")
                     
+                    # CRITICAL FIX: Binance API error -4136: "Target strategy invalid for orderType TRAILING_STOP_MARKET,closePosition true"
+                    # Solution: Use quantity instead of closePosition for TRAILING_STOP_MARKET orders
+                    # According to Binance docs, closePosition=true with TRAILING_STOP_MARKET requires reduceOnly,
+                    # but reduceOnly is not allowed in Hedge Mode. So we use quantity instead.
                     trailing_params = {
                         'symbol': formatted_symbol,
                         'side': trailing_stop_side,
@@ -988,39 +1126,86 @@ class BinanceHandler:
                         'callbackRate': callback_rate,
                         'activationPrice': activation_price,
                         'workingType': working_type,
-                        'closePosition': True
+                        'quantity': position_size if position_size > 0 else quantity  # Use position size instead of closePosition
                     }
                     
-                    # Add positionSide if in hedge mode (required by Binance)
-                    # Note: In one-way mode, positionSide is not needed
-                    # But we add it for compatibility
-                    trailing_params['positionSide'] = position_side
+                    # CRITICAL: positionSide is ONLY required in HEDGE mode
+                    # In ONE-WAY mode, positionSide must NOT be included (causes API error)
+                    if not is_one_way_mode:
+                        trailing_params['positionSide'] = position_side
+                        logger.info(f"📌 Hedge mode detected - adding positionSide: {position_side}")
+                    else:
+                        logger.info(f"📌 One-way mode detected - NOT adding positionSide")
                     
                     logger.info(f"📋 Trailing Stop Parameters:")
                     for key, value in trailing_params.items():
                         logger.info(f"   {key}: {value}")
                     
                     trailing_order = self.client.futures_create_order(**trailing_params)
-                    trailing_stop_id = trailing_order.get('orderId')
-                    trailing_stop_success = True
                     
-                    logger.info(f"✅ Trailing stop order placed successfully!")
-                    logger.info(f"   Order ID: {trailing_stop_id}")
+                    # CRITICAL: Binance returns algoId for TRAILING_STOP_MARKET orders, not orderId
+                    # Trailing stop orders are Algo Orders (CONDITIONAL type)
+                    trailing_stop_id = trailing_order.get('algoId') or trailing_order.get('orderId')
+                    
+                    if trailing_stop_id is None:
+                        logger.error(f"❌ CRITICAL: Neither algoId nor orderId found in response!")
+                        logger.error(f"   Response keys: {list(trailing_order.keys())}")
+                        logger.error(f"   Full response: {trailing_order}")
+                    else:
+                        algo_type = trailing_order.get('algoType', 'N/A')
+                        algo_status = trailing_order.get('algoStatus', 'N/A')
+                        logger.info(f"✅ Trailing stop order placed successfully!")
+                        logger.info(f"   Algo ID: {trailing_stop_id}")
+                        logger.info(f"   Algo Type: {algo_type}")
+                        logger.info(f"   Algo Status: {algo_status}")
+                    
+                    trailing_stop_success = True
                     break
                     
                 except BinanceAPIException as e:
                     error_code = e.code
                     error_msg = e.message
-                    logger.warning(f"⚠️ Attempt {attempt + 1} failed: {error_msg} (Code: {error_code})")
+                    logger.error(f"❌ Trailing Stop Attempt {attempt + 1}/{max_retries} FAILED:")
+                    logger.error(f"   Error Code: {error_code}")
+                    logger.error(f"   Error Message: {error_msg}")
+                    logger.error(f"   Parameters used:")
+                    for key, value in trailing_params.items():
+                        logger.error(f"      {key}: {value}")
+                    
+                    # Log specific error details
+                    if hasattr(e, 'response'):
+                        logger.error(f"   Full API Response: {e.response}")
+                    
+                    # Log position information for debugging
+                    try:
+                        positions = self.client.futures_position_information()
+                        for pos in positions:
+                            if pos.get('symbol') == formatted_symbol:
+                                pos_amt = abs(float(pos.get('positionAmt', '0')))
+                                if pos_amt > 0:
+                                    logger.error(f"   Current Position: {formatted_symbol} | Size: {pos_amt} | Side: {pos.get('positionSide', 'BOTH')}")
+                                    break
+                    except Exception as pos_e:
+                        logger.error(f"   Could not check position: {str(pos_e)}")
+                    
+                    # Log position mode
+                    logger.error(f"   Position Mode: {'ONE-WAY' if is_one_way_mode else 'HEDGE'}")
                     
                     if attempt < max_retries - 1:
                         delay = retry_delays[attempt]
                         logger.info(f"⏳ Retrying in {delay}s...")
                         time.sleep(delay)
                     else:
-                        logger.error(f"❌ All {max_retries} attempts failed")
+                        logger.error(f"❌ All {max_retries} attempts failed. Last error: {error_msg} (Code: {error_code})")
+                        trailing_stop_success = False
                 except Exception as e:
+                    import traceback
                     logger.error(f"❌ Unexpected error in attempt {attempt + 1}: {str(e)}")
+                    logger.error(f"   Traceback: {traceback.format_exc()}")
+                    logger.error(f"   Parameters used:")
+                    for key, value in trailing_params.items():
+                        logger.error(f"      {key}: {value}")
+                    
                     if attempt < max_retries - 1:
                         delay = retry_delays[attempt]
                         time.sleep(delay)
@@ -1028,43 +1213,115 @@ class BinanceHandler:
                         trailing_stop_success = False
             
             # ====================================================================
-            # STEP 8: FALLBACK - PLACE HARD STOP LOSS (if trailing stop failed)
+            # STEP 8: FALLBACK - PLACE TP/SL (if trailing stop failed)
             # ====================================================================
             if not trailing_stop_success:
                 logger.info("=" * 80)
-                logger.info("⚠️ STEP 7: TRAILING STOP FAILED - PLACING FALLBACK STOP LOSS")
+                logger.info("⚠️ STEP 8: TRAILING STOP FAILED - PLACING FALLBACK TP/SL")
                 logger.info("=" * 80)
                 
+                # Re-check position mode for fallback (may have changed)
+                is_one_way_mode_fallback = True
                 try:
-                    stop_order = self.client.futures_create_order(
-                        symbol=formatted_symbol,
-                        side=trailing_stop_side,
-                        positionSide=position_side,
-                        type='STOP_MARKET',
-                        stopPrice=stop_loss_price,
-                        closePosition=True
-                    )
+                    positions = self.client.futures_position_information()
+                    for pos in positions:
+                        if pos.get('symbol') == formatted_symbol:
+                            pos_side = pos.get('positionSide', 'BOTH')
+                            if pos_side != 'BOTH':
+                                is_one_way_mode_fallback = False
+                                break
+                except Exception as e:
+                    logger.warning(f"Could not check position mode for fallback: {str(e)}, assuming one-way mode")
+                    is_one_way_mode_fallback = True
+                
+                # Place TP and SL orders separately (like in place_order)
+                tp_order_id = None
+                sl_order_id = None
+                tp_success = False
+                sl_success = False
+                
+                # Place Take Profit order
+                try:
+                    tp_side = 'SELL' if direction == 'long' else 'BUY'
+                    tp_params = {
+                        'symbol': formatted_symbol,
+                        'side': tp_side,
+                        'type': 'TAKE_PROFIT_MARKET',
+                        'stopPrice': take_profit_price,
+                        'closePosition': True
+                    }
                     
-                    stop_order_id = stop_order.get('orderId')
+                    if not is_one_way_mode_fallback:
+                        tp_params['positionSide'] = position_side
+                    
+                    logger.info(f"📋 Fallback Take Profit Parameters:")
+                    for key, value in tp_params.items():
+                        logger.info(f"   {key}: {value}")
+                    
+                    tp_order = self.client.futures_create_order(**tp_params)
+                    tp_order_id = tp_order.get('orderId')
+                    tp_success = True
+                    logger.info(f"✅ Fallback take profit placed successfully!")
+                    logger.info(f"   Order ID: {tp_order_id}")
+                    logger.info(f"   Take Profit Price: ${take_profit_price:.2f}")
+                except Exception as tp_error:
+                    logger.error(f"❌ Failed to place fallback take profit: {str(tp_error)}")
+                    tp_success = False
+                
+                # Place Stop Loss order
+                try:
+                    sl_side = 'SELL' if direction == 'long' else 'BUY'
+                    sl_params = {
+                        'symbol': formatted_symbol,
+                        'side': sl_side,
+                        'type': 'STOP_MARKET',
+                        'stopPrice': stop_loss_price,
+                        'closePosition': True
+                    }
+                    
+                    if not is_one_way_mode_fallback:
+                        sl_params['positionSide'] = position_side
+                    
+                    logger.info(f"📋 Fallback Stop Loss Parameters:")
+                    for key, value in sl_params.items():
+                        logger.info(f"   {key}: {value}")
+                    
+                    sl_order = self.client.futures_create_order(**sl_params)
+                    sl_order_id = sl_order.get('orderId')
+                    sl_success = True
                     logger.info(f"✅ Fallback stop loss placed successfully!")
-                    logger.info(f"   Order ID: {stop_order_id}")
+                    logger.info(f"   Order ID: {sl_order_id}")
                     logger.info(f"   Stop Price: ${stop_loss_price:.2f}")
+                except Exception as sl_error:
+                    logger.error(f"❌ Failed to place fallback stop loss: {str(sl_error)}")
+                    sl_success = False
+                
+                # Return result based on what was placed
+                if tp_success or sl_success:
+                    message_parts = []
+                    if tp_success:
+                        message_parts.append("take profit")
+                    if sl_success:
+                        message_parts.append("stop loss")
+                    message = f"Entry order placed. Trailing stop failed, fallback {' and '.join(message_parts)} placed."
                     
                     return {
                         "success": True,
-                        "message": "Entry order placed. Trailing stop failed, fallback stop loss placed.",
+                        "message": message,
                         "order_id": entry_order_id,
                         "trailing_stop_id": None,
-                        "fallback_stop_id": stop_order_id,
+                        "fallback_tp_id": tp_order_id if tp_success else None,
+                        "fallback_sl_id": sl_order_id if sl_success else None,
                         "entry_price": entry_price,
-                        "fallback_used": True
+                        "fallback_used": True,
+                        "tp_success": tp_success,
+                        "sl_success": sl_success
                     }
-                    
-                except Exception as e:
-                    logger.error(f"❌ Fallback stop loss also failed: {str(e)}")
+                else:
+                    logger.error(f"❌ Both fallback TP and SL failed!")
                     return {
                         "success": False,
-                        "error": f"Entry order placed, but trailing stop and fallback both failed: {str(e)}",
+                        "error": f"Entry order placed, but trailing stop and both fallback TP/SL failed",
                         "order_id": entry_order_id
                     }
             
