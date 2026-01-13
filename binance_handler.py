@@ -827,7 +827,20 @@ class BinanceHandler:
             position_side = 'LONG' if direction == 'long' else 'SHORT'
             
             # ====================================================================
-            # STEP 2: SETUP LEVERAGE & MARGIN
+            # STEP 2: CHECK TRADING PERMISSIONS
+            # ====================================================================
+            # Check if trading is enabled globally
+            if not self.config.get('enable_trading', False):
+                logger.warning("❌ Trading is disabled globally")
+                return {"success": False, "error": "Trading is disabled globally"}
+            
+            # Check coin-specific trading status
+            if not self.coin_config_manager.is_trading_enabled(formatted_symbol):
+                logger.warning(f"❌ Trading is disabled for {formatted_symbol}")
+                return {"success": False, "error": f"Trading is disabled for {formatted_symbol}"}
+            
+            # ====================================================================
+            # STEP 3: SETUP LEVERAGE & MARGIN
             # ====================================================================
             coin_config = self.coin_config_manager.get_coin_config(formatted_symbol)
             self.set_leverage(formatted_symbol, coin_config['leverage'])
@@ -850,7 +863,7 @@ class BinanceHandler:
             logger.info(f"   Working Type: {working_type}")
             
             # ====================================================================
-            # STEP 3: CHECK EXISTING POSITIONS (WITH AUTO SWITCH)
+            # STEP 4: CHECK EXISTING POSITIONS (WITH AUTO SWITCH)
             # ====================================================================
             current_positions = self.get_open_positions()
             
@@ -886,7 +899,7 @@ class BinanceHandler:
             # No need for additional check here
             
             # ====================================================================
-            # STEP 4: CALCULATE QUANTITY
+            # STEP 5: CALCULATE QUANTITY
             # ====================================================================
             margin_asset = self._get_margin_asset(formatted_symbol)
             available_balance, total_balance, unrealized_pnl = self.get_account_balance(margin_asset)
@@ -941,10 +954,10 @@ class BinanceHandler:
                 return {"success": False, "error": error_msg}
             
             # ====================================================================
-            # STEP 5: PLACE ENTRY ORDER (MARKET)
+            # STEP 6: PLACE ENTRY ORDER (MARKET)
             # ====================================================================
             logger.info("=" * 80)
-            logger.info("📤 STEP 5: PLACING ENTRY ORDER (MARKET)")
+            logger.info("📤 STEP 6: PLACING ENTRY ORDER (MARKET)")
             logger.info("=" * 80)
             
             # Format quantity according to Binance precision requirements
@@ -1029,7 +1042,7 @@ class BinanceHandler:
                 return {"success": False, "error": f"Entry order failed: {str(e)}"}
             
             # ====================================================================
-            # STEP 6: CALCULATE AUTO-PRICES (if needed)
+            # STEP 7: CALCULATE AUTO-PRICES (if needed)
             # ====================================================================
             if activation_price is None:
                 if direction == 'long':
@@ -1072,10 +1085,10 @@ class BinanceHandler:
                 activation_price = self.tp_sl_manager._round_to_price_step(formatted_symbol, activation_price)
             
             # ====================================================================
-            # STEP 7: PLACE TRAILING STOP ORDER (with retry)
+            # STEP 8: PLACE TRAILING STOP ORDER (with retry)
             # ====================================================================
             logger.info("=" * 80)
-            logger.info("📤 STEP 7: PLACING TRAILING STOP ORDER")
+            logger.info("📤 STEP 8: PLACING TRAILING STOP ORDER")
             logger.info("=" * 80)
             
             trailing_stop_side = 'SELL' if direction == 'long' else 'BUY'
@@ -1225,11 +1238,11 @@ class BinanceHandler:
                         trailing_stop_success = False
             
             # ====================================================================
-            # STEP 8: FALLBACK - PLACE TP/SL (if trailing stop failed)
+            # STEP 9: FALLBACK - PLACE TP/SL (if trailing stop failed)
             # ====================================================================
             if not trailing_stop_success:
                 logger.info("=" * 80)
-                logger.info("⚠️ STEP 8: TRAILING STOP FAILED - PLACING FALLBACK TP/SL")
+                logger.info("⚠️ STEP 9: TRAILING STOP FAILED - PLACING FALLBACK TP/SL")
                 logger.info("=" * 80)
                 
                 # Re-check position mode for fallback (may have changed)
@@ -1338,7 +1351,7 @@ class BinanceHandler:
                     }
             
             # ====================================================================
-            # STEP 9: SUCCESS RETURN
+            # STEP 10: SUCCESS RETURN
             # ====================================================================
             logger.info("=" * 80)
             logger.info("✅ TRAILING STOP STRATEGY - SUCCESS")
