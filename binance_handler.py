@@ -786,8 +786,17 @@ class BinanceHandler:
                 return {"success": False, "error": f"Invalid callbackRate format: {callback_rate_raw}"}
             
             # Validate callbackRate limits (0.1% - 5.0%)
-            if callback_rate < 0.1 or callback_rate > 5.0:
-                return {"success": False, "error": f"callbackRate must be between 0.1% and 5.0%. Got: {callback_rate}%"}
+            # CRITICAL: Binance Algo Order API requires callbackRate between 0.1 and 5.0
+            # Also round to 1 decimal place to avoid "Invalid callBack rate" error
+            if callback_rate < 0.1:
+                logger.warning(f"⚠️ callbackRate {callback_rate}% is below minimum 0.1%, adjusting to 0.1%")
+                callback_rate = 0.1
+            elif callback_rate > 5.0:
+                logger.warning(f"⚠️ callbackRate {callback_rate}% is above maximum 5.0%, adjusting to 5.0%")
+                callback_rate = 5.0
+            
+            # Round to 1 decimal place for Binance API compatibility
+            callback_rate = round(callback_rate, 1)
             
             # Parse activationPrice (optional - auto-calculated if None/0.0/invalid)
             activation_price_raw = data.get('activationPrice')
@@ -1157,7 +1166,11 @@ class BinanceHandler:
                     for key, value in trailing_params.items():
                         logger.info(f"   {key}: {value}")
                     
-                    trailing_order = self.client.futures_create_order(**trailing_params)
+                    # CRITICAL FIX: Use Algo Order API for TRAILING_STOP_MARKET
+                    # Error -4120: "Order type not supported for this endpoint. Please use the Algo Order API endpoints instead."
+                    # Solution: Use futures_create_algo_order instead of futures_create_order
+                    logger.info(f"🔧 Using Algo Order API (futures_create_algo_order) for TRAILING_STOP_MARKET")
+                    trailing_order = self.client.futures_create_algo_order(**trailing_params)
                     
                     # CRITICAL: Binance returns algoId for TRAILING_STOP_MARKET orders, not orderId
                     # Trailing stop orders are Algo Orders (CONDITIONAL type)
