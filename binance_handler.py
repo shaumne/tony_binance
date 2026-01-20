@@ -6,6 +6,10 @@ from datetime import datetime
 import asyncio
 import pandas as pd
 import numpy as np
+import requests
+import hmac
+import hashlib
+from urllib.parse import urlencode
 
 # Import management systems
 from tp_sl_manager import TPSLManager
@@ -1168,9 +1172,16 @@ class BinanceHandler:
                     
                     # CRITICAL FIX: Use Algo Order API for TRAILING_STOP_MARKET
                     # Error -4120: "Order type not supported for this endpoint. Please use the Algo Order API endpoints instead."
-                    # Solution: Use futures_create_algo_order instead of futures_create_order
-                    logger.info(f"🔧 Using Algo Order API (futures_create_algo_order) for TRAILING_STOP_MARKET")
-                    trailing_order = self.client.futures_create_algo_order(**trailing_params)
+                    # Solution: Call Binance Algo Order API directly (python-binance v1.0.32 doesn't support this)
+                    logger.info(f"🔧 Using Algo Order API (direct HTTP call) for TRAILING_STOP_MARKET")
+                    trailing_order = self._create_futures_algo_order(**trailing_params)
+                    
+                    # Check for API errors
+                    if 'error' in trailing_order:
+                        error_msg = trailing_order.get('error', 'Unknown error')
+                        logger.error(f"❌ Algo Order API returned error: {error_msg}")
+                        trailing_stop_success = False
+                        continue  # Go to next retry attempt
                     
                     # CRITICAL: Binance returns algoId for TRAILING_STOP_MARKET orders, not orderId
                     # Trailing stop orders are Algo Orders (CONDITIONAL type)
@@ -1386,6 +1397,70 @@ class BinanceHandler:
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             return {"success": False, "error": f"Trailing stop strategy failed: {str(e)}"}
+    
+    def _create_futures_algo_order(self, **params):
+        """
+        Manual implementation of futures_create_algo_order
+        Since python-binance doesn't support this method, we call Binance API directly
+        
+        Args:
+            **params: Order parameters (symbol, side, type, etc.)
+            
+        Returns:
+            dict: API response
+        """
+        try:
+            base_url = "https://fapi.binance.com"
+            endpoint = "/fapi/v1/algo/futures/newOrderVp"
+            
+            # Add timestamp
+            params['timestamp'] = int(time.time() * 1000)
+            
+            # Create query string
+            query_string = urlencode(params)
+            
+            # Create signature
+            signature = hmac.new(
+                self.secret_key.encode('utf-8'),
+                query_string.encode('utf-8'),
+                hashlib.sha256
+            ).hexdigest()
+            
+            # Add signature to params
+            params['signature'] = signature
+            
+            # Headers
+            headers = {
+                'X-MBX-APIKEY': self.api_key
+            }
+            
+            # Make request
+            url = f"{base_url}{endpoint}"
+            logger.info(f"🌐 Making direct API call to: {endpoint}")
+            logger.debug(f"   Parameters: {params}")
+            
+            response = requests.post(url, params=params, headers=headers, timeout=10)
+            
+            # Log response
+            logger.info(f"📥 API Response Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                # Parse error
+                try:
+                    error_data = response.json()
+                    logger.error(f"❌ API Error: {error_data}")
+                    return {'error': error_data}
+                except:
+                    logger.error(f"❌ API Error: {response.text}")
+                    return {'error': response.text}
+                    
+        except Exception as e:
+            logger.error(f"❌ Exception in _create_futures_algo_order: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return {'error': str(e)}
     
     def cleanup_orphaned_trailing_stops(self):
         """
