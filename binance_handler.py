@@ -263,7 +263,7 @@ class BinanceHandler:
                 return None
     
     def get_atr(self, symbol, period=14):
-        """Calculate ATR using 1-hour candlestick data from Binance
+        """Calculate ATR using 15-minute candlestick data from Binance
         
         Args:
             symbol (str): Trading symbol (e.g., 'BTCUSDT')
@@ -276,10 +276,10 @@ class BinanceHandler:
             formatted_symbol = self._format_symbol(symbol)
             logger.info(f"Calculating ATR for {formatted_symbol}, Period: {period}")
             
-            # Fetch 1h klines (need period + 50 for ATR smoothing)
+            # Fetch 15m klines (need period + 50 for ATR smoothing)
             klines = self.client.futures_klines(
                 symbol=formatted_symbol,
-                interval=Client.KLINE_INTERVAL_1HOUR,  # 1h interval
+                interval=Client.KLINE_INTERVAL_15MINUTE,  # 15m interval
                 limit=period + 50
             )
             
@@ -312,7 +312,7 @@ class BinanceHandler:
             df['ATR'] = df['tr'].ewm(alpha=1/period, adjust=False).mean()
             
             atr_value = df['ATR'].iloc[-1]
-            logger.info(f"Calculated ATR (1h, {period}) for {formatted_symbol}: {atr_value:.4f}")
+            logger.info(f"Calculated ATR (15m, {period}) for {formatted_symbol}: {atr_value:.4f}")
             return atr_value
                 
         except Exception as e:
