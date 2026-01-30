@@ -1063,13 +1063,23 @@ class BinanceHandler:
                 logger.info(f"🔄 Auto-calculated activation price: ${activation_price:.2f}")
             
             if stop_loss_price is None:
-                if direction == 'long':
-                    stop_loss_price = entry_price * 0.97  # 3% below entry
+                # Use config ATR period + SL multiplier (same as tony_web_app)
+                atr_period = self.tp_sl_manager.get_atr_period(symbol)
+                atr_value = self.get_atr(formatted_symbol, atr_period)
+                if atr_value and atr_value > 0:
+                    _, stop_loss_price = self.tp_sl_manager.calculate_tp_sl_prices(
+                        symbol, entry_price, atr_value, direction
+                    )
+                    logger.info(f"🔄 ATR-based stop loss: ${stop_loss_price:.2f} (ATR={atr_value:.4f}, config sl_mult)")
                 else:
-                    stop_loss_price = entry_price * 1.03  # 3% above entry
-                # Format stop loss price precision
-                stop_loss_price = self.tp_sl_manager._round_to_price_step(formatted_symbol, stop_loss_price)
-                logger.info(f"🔄 Auto-calculated stop loss: ${stop_loss_price:.2f}")
+                    # Fallback when ATR unavailable
+                    sl_pct = 0.03
+                    if direction == 'long':
+                        stop_loss_price = entry_price * (1 - sl_pct)
+                    else:
+                        stop_loss_price = entry_price * (1 + sl_pct)
+                    stop_loss_price = self.tp_sl_manager._round_to_price_step(formatted_symbol, stop_loss_price)
+                    logger.warning(f"🔄 Fallback stop loss (ATR unavailable): ${stop_loss_price:.2f} (±{sl_pct*100:.0f}%)")
             else:
                 # Format provided stop loss price precision
                 stop_loss_price = self.tp_sl_manager._round_to_price_step(formatted_symbol, stop_loss_price)
@@ -1364,13 +1374,38 @@ class BinanceHandler:
                     }
             
             # ====================================================================
+            # STEP 9b: PARALLEL HARD STOP LOSS (adverse direction)
+            # ====================================================================
+            # Trailing only triggers when price moves IN FAVOR (short: down).
+            # When price moves AGAINST (short: up), place fixed stop to limit loss.
+            hard_stop_order_id = None
+            try:
+                sl_side = 'SELL' if direction == 'long' else 'BUY'
+                sl_params = {
+                    'symbol': formatted_symbol,
+                    'side': sl_side,
+                    'type': 'STOP_MARKET',
+                    'stopPrice': stop_loss_price,
+                    'closePosition': True
+                }
+                if not is_one_way_mode:
+                    sl_params['positionSide'] = position_side
+                logger.info("📤 Placing parallel hard stop loss (adverse direction)...")
+                logger.info(f"   Stop Price: ${stop_loss_price:.2f}")
+                sl_order = self.client.futures_create_order(**sl_params)
+                hard_stop_order_id = sl_order.get('orderId')
+                logger.info(f"✅ Hard stop loss placed: Order ID {hard_stop_order_id}")
+            except Exception as sl_err:
+                logger.warning(f"⚠️ Parallel hard stop placement failed (trailing OK): {sl_err}")
+
+            # ====================================================================
             # STEP 10: SUCCESS RETURN
             # ====================================================================
             logger.info("=" * 80)
             logger.info("✅ TRAILING STOP STRATEGY - SUCCESS")
             logger.info("=" * 80)
             
-            return {
+            result = {
                 "success": True,
                 "message": "Trailing stop order placed successfully",
                 "order_id": entry_order_id,
@@ -1380,6 +1415,9 @@ class BinanceHandler:
                 "callback_rate": callback_rate,
                 "fallback_used": False
             }
+            if hard_stop_order_id:
+                result["hard_stop_order_id"] = hard_stop_order_id
+            return result
             
         except Exception as e:
             logger.error(f"❌ Trailing stop strategy error: {str(e)}")
