@@ -455,6 +455,17 @@ class BinanceHandler:
                 logger.error(f"❌ Quantity formatting failed: {ve}")
                 return {"error": str(ve)}
 
+            # Binance Futures min notional: 100 USDT (API -4164)
+            if action == 'open':
+                price_for_notional = self.get_symbol_price(formatted_symbol)
+                if price_for_notional and price_for_notional > 0:
+                    notional = float(quantity) * price_for_notional
+                    if notional < 100:
+                        return {
+                            "error": f"Order notional (${notional:.2f}) is below Binance minimum of $100. "
+                            f"Increase order_size_percentage for {formatted_symbol} in Settings or add balance."
+                        }
+
             # Place main order
             logger.info(f"📤 Placing order:")
             logger.info(f"   Symbol: {formatted_symbol}")
