@@ -759,8 +759,37 @@ def process_signal(symbol, direction, action):
         
         # Execute trade
         side = f"{action}_{direction}"
-        order_result = binance_handler.place_order(symbol, side)
-        
+
+        # BUG FIX #3: For close signals, pass the actual position size so the
+        # order isn't recalculated from balance (which gives the wrong quantity).
+        close_quantity = None
+        if action == 'close':
+            for pos in current_positions:
+                pos_symbol = pos.get('symbol', '').upper()
+                pos_amt = float(pos.get('positionAmt', 0))
+                pos_side_raw = pos.get('positionSide', 'BOTH')
+
+                if pos_symbol != symbol.upper():
+                    continue
+
+                is_match = False
+                if pos_side_raw == 'BOTH':
+                    is_match = (direction == 'long' and pos_amt > 0) or \
+                               (direction == 'short' and pos_amt < 0)
+                else:
+                    is_match = pos_side_raw == direction.upper()
+
+                if is_match and abs(pos_amt) > 0:
+                    close_quantity = abs(pos_amt)
+                    logger.info(f"📌 Close signal: using actual position size {close_quantity} for {symbol}")
+                    break
+
+            if close_quantity is None:
+                logger.warning(f"⚠️ Close signal for {symbol} {direction} but no matching position found")
+                return {"success": False, "error": f"No {direction} position found for {symbol}"}
+
+        order_result = binance_handler.place_order(symbol, side, quantity=close_quantity)
+
         if order_result and 'error' not in order_result:
             order_id = order_result.get('orderId', 'N/A')
             logger.info(f"✅ Order executed successfully: {order_id}")

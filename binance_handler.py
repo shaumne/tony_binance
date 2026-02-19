@@ -433,93 +433,129 @@ class BinanceHandler:
             else:  # close
                 binance_side = 'SELL' if direction == 'long' else 'BUY'
                 position_side = 'LONG' if direction == 'long' else 'SHORT'
-            
+
+            # ----------------------------------------------------------------
+            # BUG FIX #1: Detect position mode — positionSide ONLY in HEDGE
+            # In ONE-WAY mode sending positionSide=LONG/SHORT causes API error
+            # ----------------------------------------------------------------
+            is_one_way_mode = True
+            try:
+                position_mode = self.client.futures_get_position_mode()
+                is_one_way_mode = not position_mode.get('dualSidePosition', False)
+                logger.info(f"📌 Position mode: {'ONE-WAY' if is_one_way_mode else 'HEDGE'}")
+            except Exception as pm_err:
+                logger.warning(f"⚠️ Could not detect position mode: {pm_err}, assuming ONE-WAY")
+                is_one_way_mode = True
+
+            # BUG FIX #4: Format quantity before placing order
+            try:
+                quantity = self._format_quantity(formatted_symbol, quantity)
+                logger.info(f"✅ Formatted quantity: {quantity}")
+            except ValueError as ve:
+                logger.error(f"❌ Quantity formatting failed: {ve}")
+                return {"error": str(ve)}
+
             # Place main order
             logger.info(f"📤 Placing order:")
             logger.info(f"   Symbol: {formatted_symbol}")
             logger.info(f"   Side: {binance_side}")
-            logger.info(f"   Position Side: {position_side}")
-            logger.info(f"   Quantity: {quantity:.6f}")
-            
-            order_result = self.client.futures_create_order(
-                symbol=formatted_symbol,
-                side=binance_side,
-                positionSide=position_side,
-                type=order_type,
-                quantity=quantity
-            )
-            
+            logger.info(f"   Position Mode: {'ONE-WAY' if is_one_way_mode else 'HEDGE'}")
+            logger.info(f"   Quantity: {quantity}")
+
+            order_params = {
+                'symbol': formatted_symbol,
+                'side': binance_side,
+                'type': order_type,
+                'quantity': quantity,
+            }
+            if not is_one_way_mode:
+                order_params['positionSide'] = position_side
+                logger.info(f"   positionSide: {position_side} (HEDGE mode)")
+            else:
+                if action == 'close':
+                    order_params['reduceOnly'] = True
+                logger.info(f"   reduceOnly: {order_params.get('reduceOnly', False)} (ONE-WAY mode)")
+
+            order_result = self.client.futures_create_order(**order_params)
+
             logger.info(f"✅ Order placed successfully!")
             logger.info(f"   Order ID: {order_result['orderId']}")
-            
+
             # Place TP/SL orders for open positions
             if action == 'open':
                 try:
                     # Get ATR value using 1h data
                     atr_period = self.tp_sl_manager.get_atr_period(symbol)
                     atr_value = self.get_atr(formatted_symbol, atr_period)
-                    
+
                     if atr_value > 0:
-                        # Get current price
-                        current_price = float(order_result.get('avgPrice', self.get_symbol_price(formatted_symbol)))
-                        
+                        # BUG FIX #5: MARKET orders return avgPrice="0" immediately.
+                        # Wait briefly then fetch real market price for accurate TP/SL.
+                        avg_price_raw = order_result.get('avgPrice', '0')
+                        if avg_price_raw and float(avg_price_raw) > 0:
+                            current_price = float(avg_price_raw)
+                        else:
+                            time.sleep(0.3)
+                            current_price = self.get_symbol_price(formatted_symbol)
+                        logger.info(f"   Entry price used for TP/SL: ${current_price:.4f}")
+
                         # Calculate TP/SL prices
                         tp_price, sl_price = self.tp_sl_manager.calculate_tp_sl_prices(
                             symbol, current_price, atr_value, direction
                         )
-                        
+
                         # Validate TP/SL logic
                         is_valid = self.tp_sl_manager.validate_tp_sl_logic(
                             symbol, direction, current_price, tp_price, sl_price
                         )
-                        
+
                         if is_valid:
-                            # Place TP order
                             tp_side = 'SELL' if direction == 'long' else 'BUY'
                             tp_order_success = False
                             sl_order_success = False
-                            
-                            # Place TP order with individual error handling
+
+                            # BUG FIX #2: positionSide on TP/SL also conditional on mode
+                            tp_base_params = {
+                                'symbol': formatted_symbol,
+                                'side': tp_side,
+                                'closePosition': True,
+                            }
+                            if not is_one_way_mode:
+                                tp_base_params['positionSide'] = position_side
+
+                            # Place TP order
                             try:
                                 tp_order = self.client.futures_create_order(
-                                    symbol=formatted_symbol,
-                                    side=tp_side,
-                                    positionSide=position_side,
+                                    **tp_base_params,
                                     type='TAKE_PROFIT_MARKET',
                                     stopPrice=tp_price,
-                                    closePosition=True
                                 )
                                 tp_order_success = True
-                                logger.info(f"✅ TP order placed: ${tp_price:.2f} (Order ID: {tp_order.get('orderId', 'N/A')})")
+                                logger.info(f"✅ TP order placed: ${tp_price:.4f} (Order ID: {tp_order.get('orderId', 'N/A')})")
                             except Exception as tp_error:
                                 logger.error(f"❌ Failed to place TP order: {str(tp_error)}")
-                            
-                            # Place SL order with individual error handling
+
+                            # Place SL order
                             try:
                                 sl_order = self.client.futures_create_order(
-                                    symbol=formatted_symbol,
-                                    side=tp_side,
-                                    positionSide=position_side,
+                                    **tp_base_params,
                                     type='STOP_MARKET',
                                     stopPrice=sl_price,
-                                    closePosition=True
                                 )
                                 sl_order_success = True
-                                logger.info(f"✅ SL order placed: ${sl_price:.2f} (Order ID: {sl_order.get('orderId', 'N/A')})")
+                                logger.info(f"✅ SL order placed: ${sl_price:.4f} (Order ID: {sl_order.get('orderId', 'N/A')})")
                             except Exception as sl_error:
                                 logger.error(f"❌ Failed to place SL order: {str(sl_error)}")
                                 logger.warning(f"⚠️  WARNING: Entry order placed but SL order failed! Position is unprotected!")
-                            
-                            # Send notification only if at least one order succeeded
+
                             if tp_order_success or sl_order_success:
                                 self._send_enhanced_notification(
-                                    symbol, side, current_price, quantity, 
+                                    symbol, side, current_price, quantity,
                                     order_result['orderId'],
                                     {'tp_price': tp_price, 'sl_price': sl_price, 'direction': direction,
                                      'tp_success': tp_order_success, 'sl_success': sl_order_success}
                                 )
-                            
-                            # Warn if SL failed
+
                             if not sl_order_success:
                                 logger.warning(f"⚠️  CRITICAL: SL order failed for {formatted_symbol} {position_side} position!")
                                 logger.warning(f"   Entry order ID: {order_result.get('orderId', 'N/A')}")
