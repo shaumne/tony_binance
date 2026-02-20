@@ -460,11 +460,14 @@ class BinanceHandler:
                 price_for_notional = self.get_symbol_price(formatted_symbol)
                 if price_for_notional and price_for_notional > 0:
                     notional = float(quantity) * price_for_notional
+                    logger.info(f"   Notional check: qty={quantity} x price={price_for_notional:.4f} = ${notional:.2f} (min $100)")
                     if notional < 100:
-                        return {
-                            "error": f"Order notional (${notional:.2f}) is below Binance minimum of $100. "
+                        msg = (
+                            f"Order notional (${notional:.2f}) is below Binance minimum of $100. "
                             f"Increase order_size_percentage for {formatted_symbol} in Settings or add balance."
-                        }
+                        )
+                        logger.warning(f"❌ {msg}")
+                        return {"error": msg}
 
             # Place main order
             logger.info(f"📤 Placing order:")
@@ -487,7 +490,14 @@ class BinanceHandler:
                     order_params['reduceOnly'] = True
                 logger.info(f"   reduceOnly: {order_params.get('reduceOnly', False)} (ONE-WAY mode)")
 
-            order_result = self.client.futures_create_order(**order_params)
+            logger.info(f"   Calling Binance API futures_create_order (symbol={formatted_symbol}, side={binance_side}, type={order_type}, quantity={quantity})")
+            try:
+                order_result = self.client.futures_create_order(**order_params)
+            except Exception as api_err:
+                logger.error(f"❌ Binance API order failed: {type(api_err).__name__}: {api_err}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return {"error": str(api_err)}
 
             logger.info(f"✅ Order placed successfully!")
             logger.info(f"   Order ID: {order_result['orderId']}")

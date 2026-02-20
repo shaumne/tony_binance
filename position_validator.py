@@ -76,8 +76,12 @@ class PositionValidator:
                 if validation_result.get('action_required'):
                     logger.info(f"   Required action: {validation_result['action_required']}")
             else:
-                logger.warning(f"❌ Position request REJECTED: {symbol}/{direction}/{action}")
-                logger.warning(f"   Reason: {validation_result['reason']}")
+                # "No position to close" is expected when TP/SL already closed — log as INFO
+                if action == 'close' and 'position found for' in validation_result.get('reason', '') and 'to close' in validation_result.get('reason', ''):
+                    logger.info(f"ℹ️ Close skipped (no open position): {symbol}/{direction}/{action}")
+                else:
+                    logger.warning(f"❌ Position request REJECTED: {symbol}/{direction}/{action}")
+                    logger.warning(f"   Reason: {validation_result['reason']}")
             
             # Record this request to prevent duplicates
             if validation_result['allowed']:

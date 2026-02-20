@@ -785,8 +785,15 @@ def process_signal(symbol, direction, action):
                     break
 
             if close_quantity is None:
-                logger.warning(f"⚠️ Close signal for {symbol} {direction} but no matching position found")
-                return {"success": False, "error": f"No {direction} position found for {symbol}"}
+                # Position already closed (e.g. by TP/SL) or never opened — treat as success to avoid ghost retries
+                logger.info(f"ℹ️ Close signal for {symbol} {direction}: no open position (already closed or not found), skipping")
+                return {
+                    "success": True,
+                    "message": f"No {direction} position to close for {symbol} (already closed or not found)",
+                    "order_id": None,
+                    "symbol": symbol,
+                    "side": side,
+                }
 
         order_result = binance_handler.place_order(symbol, side, quantity=close_quantity)
 
@@ -802,6 +809,16 @@ def process_signal(symbol, direction, action):
             }
         else:
             error_msg = order_result.get('error', 'Unknown error') if order_result else 'No response from exchange'
+            # Position already closed (e.g. TP/SL hit between signal and order) — treat as success, no ERROR log
+            if order_result and 'No ' in error_msg and ' position found for ' in error_msg and ' to close' in error_msg:
+                logger.info(f"ℹ️ Close skipped: {error_msg}")
+                return {
+                    "success": True,
+                    "message": error_msg,
+                    "order_id": None,
+                    "symbol": symbol,
+                    "side": side,
+                }
             logger.error(f"❌ Order failed: {error_msg}")
             return {"success": False, "error": error_msg}
             
